@@ -12,3 +12,10 @@ spring:
       # Existing APIs: /product/{id}/similarids and /product/{id}
       products:
         base-url: http://localhost:3001
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # metrics: calls to the existing APIs (http.client.requests), used to measure each change
+        include: health,metrics

@@ -8,6 +8,8 @@ import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMoc
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -39,6 +41,9 @@ class SimilarProductsApiTest {
 
     @Autowired
     private MockMvcTester mvc;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
 
     @BeforeEach
     void stubProvidedMocks() {
@@ -97,6 +102,35 @@ class SimilarProductsApiTest {
 
         assertThat(mvc.get().uri("/product/{productId}/similar", "7"))
                 .hasStatus(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void recordsEachCallToTheExistingApis() {
+        double similarIdsCalls = calls("/product/{productId}/similarids");
+        double detailCalls = calls("/product/{productId}");
+
+        assertThat(mvc.get().uri("/product/{productId}/similar", "1")).hasStatusOk();
+
+        assertThat(calls("/product/{productId}/similarids") - similarIdsCalls).isEqualTo(1.0);
+        assertThat(calls("/product/{productId}") - detailCalls).isEqualTo(3.0);
+    }
+
+    @Test
+    void exposesHealthAndMetrics() {
+        assertThat(mvc.get().uri("/product/{productId}/similar", "1")).hasStatusOk();
+
+        assertThat(mvc.get().uri("/actuator/health")).hasStatusOk();
+        assertThat(mvc.get().uri("/actuator/metrics/http.client.requests")).hasStatusOk();
+    }
+
+    /**
+     * Calls made to the existing APIs for a URI template, as recorded by the HTTP client
+     * instrumentation.
+     */
+    private double calls(String uriTemplate) {
+        return meterRegistry.find("http.client.requests").tag("uri", uriTemplate).timers().stream()
+                .mapToDouble(Timer::count)
+                .sum();
     }
 
     private static void similarIds(String productId, String ids) {
