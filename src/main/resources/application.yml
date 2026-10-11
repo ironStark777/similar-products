@@ -1,0 +1,9 @@
+server:
+  port: 5000
+
+spring:
+  application:
+    name: similar-products
+  threads:
+    virtual:
+      enabled: true
