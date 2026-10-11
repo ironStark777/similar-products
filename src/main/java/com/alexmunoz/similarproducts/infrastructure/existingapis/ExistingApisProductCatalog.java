@@ -1,6 +1,7 @@
 package com.alexmunoz.similarproducts.infrastructure.existingapis;
 
 import com.alexmunoz.similarproducts.domain.ProductCatalog;
+import com.alexmunoz.similarproducts.domain.ProductCatalogException;
 import com.alexmunoz.similarproducts.domain.ProductDetail;
 import com.alexmunoz.similarproducts.domain.ProductNotFoundException;
 import java.util.List;
@@ -9,8 +10,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 
 /**
- * {@link ProductCatalog} backed by the existing APIs. Their 404 responses are translated
- * into domain terms.
+ * {@link ProductCatalog} backed by the existing APIs. Only their 404 responses mean that a
+ * product does not exist; a successful response without body is an error.
  */
 @Component
 class ExistingApisProductCatalog implements ProductCatalog {
@@ -24,7 +25,8 @@ class ExistingApisProductCatalog implements ProductCatalog {
     @Override
     public List<String> findSimilarIds(String productId) {
         try {
-            return existingProductsApi.getSimilarProductIds(productId);
+            return requireBody(existingProductsApi.getSimilarProductIds(productId),
+                    "similar ids of product " + productId);
         } catch (HttpClientErrorException.NotFound ex) {
             throw new ProductNotFoundException(productId);
         }
@@ -33,9 +35,17 @@ class ExistingApisProductCatalog implements ProductCatalog {
     @Override
     public Optional<ProductDetail> findById(String productId) {
         try {
-            return Optional.ofNullable(existingProductsApi.getProductDetail(productId));
+            return Optional.of(requireBody(existingProductsApi.getProductDetail(productId),
+                    "detail of product " + productId));
         } catch (HttpClientErrorException.NotFound ex) {
             return Optional.empty();
         }
+    }
+
+    private static <T> T requireBody(T body, String what) {
+        if (body == null) {
+            throw new ProductCatalogException("Empty response for the " + what);
+        }
+        return body;
     }
 }
