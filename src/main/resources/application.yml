@@ -7,3 +7,8 @@ spring:
   threads:
     virtual:
       enabled: true
+  http:
+    serviceclient:
+      # Existing APIs: /product/{id}/similarids and /product/{id}
+      products:
+        base-url: http://localhost:3001
