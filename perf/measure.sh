@@ -95,7 +95,7 @@ if [ "$k6_exit" -ne 0 ]; then
     tail -n 30 "$out/k6.txt" >&2
     fail "k6 exited with code $k6_exit, see $out/k6.txt"
 fi
-grep -E 'http_req_duration|http_reqs|iterations' "$out/k6.txt" || echo "(no summary in the k6 output)"
+grep -E '^ *(http_req_duration|http_reqs|iterations)\.*:' "$out/k6.txt" || echo "(no summary in the k6 output)"
 
 echo
 echo "== Calls to the existing APIs during the run"
@@ -114,8 +114,10 @@ influx "SELECT count(value) AS requests FROM http_reqs WHERE run_id = '$run_id' 
 cat "$out/status.txt"
 
 echo
-echo "== Latency per scenario (ms)"
-influx "SELECT percentile(value, 50) AS p50, percentile(value, 95) AS p95, max(value) AS max FROM http_req_duration WHERE run_id = '$run_id' GROUP BY scenario" \
+# Requests without response (status 0: cut by k6 or timed out) have no real duration, so
+# they are left out of the latency and only counted in the status table above.
+echo "== Latency per scenario of the answered requests (ms)"
+influx "SELECT percentile(value, 50) AS p50, percentile(value, 95) AS p95, max(value) AS max FROM http_req_duration WHERE run_id = '$run_id' AND status != '0' GROUP BY scenario" \
     > "$out/latency.txt"
 [ -s "$out/latency.txt" ] || fail "InfluxDB has no latency samples tagged run_id=$run_id"
 cat "$out/latency.txt"
