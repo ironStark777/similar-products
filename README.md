@@ -8,14 +8,14 @@ GET /product/{productId}/similar
 
 ## Running it
 
-Requirements: Java 21 or later, and Maven.
+Requirements: Java 21 or later. Maven comes with the Maven Wrapper (`./mvnw`).
 
 ```bash
-mvn spring-boot:run
+./mvnw spring-boot:run
 ```
 
 To run the tests:
 
 ```bash
-mvn verify
+./mvnw verify
 ```
