@@ -6,10 +6,12 @@ import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
 import static com.github.tomakehurst.wiremock.client.WireMock.serverError;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTimeout;
 
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import java.time.Duration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -20,6 +22,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.assertj.MockMvcTester;
+import org.springframework.web.client.HttpServerErrorException;
 
 /**
  * End-to-end tests of the agreed contract, with WireMock playing the existing APIs with
@@ -116,11 +119,25 @@ class SimilarProductsApiTest {
     }
 
     @Test
+    void abortsTheCallsInProgressWhenALookupFails() {
+        // Product 1000 answers after 5 s, product 6 fails at once
+        similarIds("8", "[1000,6]");
+
+        assertTimeout(Duration.ofSeconds(3), () -> assertThat(mvc.get().uri("/product/{productId}/similar", "8"))
+                .hasFailed()
+                .failure().hasCauseInstanceOf(HttpServerErrorException.class));
+        assertThat(meterRegistry.get("catalog.calls.active").gauge().value()).isZero();
+    }
+
+    @Test
     void exposesHealthAndMetrics() {
         assertThat(mvc.get().uri("/product/{productId}/similar", "1")).hasStatusOk();
 
         assertThat(mvc.get().uri("/actuator/health")).hasStatusOk();
         assertThat(mvc.get().uri("/actuator/metrics/http.client.requests")).hasStatusOk();
+        assertThat(mvc.get().uri("/actuator/metrics/catalog.calls.active")).hasStatusOk();
+        assertThat(mvc.get().uri("/actuator/metrics/catalog.calls.active.peak")).hasStatusOk();
+        assertThat(mvc.get().uri("/actuator/metrics/catalog.calls.permit.wait")).hasStatusOk();
     }
 
     /**

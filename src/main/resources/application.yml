@@ -13,6 +13,14 @@ spring:
       products:
         base-url: http://localhost:3001
 
+similar-products:
+  catalog-calls:
+    # Calls to the existing APIs in progress at the same time. Initial value, to be tuned
+    # with measurements.
+    max-concurrent: 100
+    # How long a call waits for a free slot before it is rejected; 0 rejects it at once.
+    permit-timeout: 100ms
+
 management:
   endpoints:
     web:
