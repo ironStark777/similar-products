@@ -22,6 +22,13 @@ final class FakeProductCatalog implements ProductCatalog {
         similarIds.put(productId, () -> result);
     }
 
+    /**
+     * Answers the similar ids of a product with the given lookup, to make it fail.
+     */
+    void similarIdsLookup(String productId, Supplier<List<String>> lookup) {
+        similarIds.put(productId, lookup);
+    }
+
     void product(ProductDetail product) {
         details.put(product.id(), () -> Optional.of(product));
     }

@@ -9,7 +9,7 @@
 The service builds its answer from two existing endpoints (`existingApis.yaml`): the similar ids of a product and the detail of a product. The application logic should not depend on HTTP, so it can be tested without a server, and the HTTP side should be tested against real responses.
 
 ## Decision
-The domain defines the `ProductCatalog` port. `ExistingApisProductCatalog` implements it with `ExistingProductsApi`, an HTTP service interface (`@HttpExchange`) configured through `spring.http.serviceclient.products.*`. Only an explicit `404` means that a product does not exist; a `200` without body is a failure. The JDK `HttpClient` is forced to HTTP/1.1: by default it attempts an HTTP/2 (h2c) upgrade on plain http connections, which the existing APIs do not need.
+The domain defines the `ProductCatalog` port. `ExistingApisProductCatalog` implements it with `ExistingProductsApi`, an HTTP service interface (`@HttpExchange`) configured through `spring.http.serviceclient.products.*`. Only an explicit `404` means that a product does not exist; any other failure, including a `200` without body, becomes a `ProductCatalogException`, or a `ProductCatalogTimeoutException` when the call timed out (ADR-0004). The JDK `HttpClient` is forced to HTTP/1.1: by default it attempts an HTTP/2 (h2c) upgrade on plain http connections, which the existing APIs do not need.
 
 ## Alternatives considered
 - **`RestClient` used directly in the adapter:** keeps the port as well, with finer control of each call, but every endpoint needs its own request and response handling. The declarative interface states both endpoints in one place, and Spring Boot configures it per group.

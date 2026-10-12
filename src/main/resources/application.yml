@@ -12,6 +12,10 @@ spring:
       # Existing APIs: /product/{id}/similarids and /product/{id}
       products:
         base-url: http://localhost:3001
+        # Timeout of each call, measured by the client from sending the request until the body
+        # has been read: it covers the connection, the response and the body. Waiting for a
+        # slot of the concurrency limit comes on top.
+        read-timeout: 1500ms
 
 similar-products:
   catalog-calls:

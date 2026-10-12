@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.alexmunoz.similarproducts.application.SimilarProductsProperties.CatalogCalls;
 import com.alexmunoz.similarproducts.domain.ProductCatalogException;
+import com.alexmunoz.similarproducts.domain.ProductCatalogTimeoutException;
 import com.alexmunoz.similarproducts.domain.ProductDetail;
 import com.alexmunoz.similarproducts.domain.ProductNotFoundException;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -13,6 +14,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
@@ -107,19 +109,100 @@ class SimilarProductsServiceTest {
     }
 
     @Test
-    void rethrowsTheFailureOfADetailLookupAsItWasThrown() {
-        catalog.similarIds("10", "1", "2");
+    void leavesOutSimilarProductsThatFailTimeOutOrAreRejected() {
+        catalog.similarIds("10", "1", "2", "3", "4");
         catalog.product(SHIRT);
         catalog.detailLookup("2", () -> {
-            throw new ProductCatalogException("Empty response for the detail of product 2");
+            throw timeout("2");
+        });
+        catalog.detailLookup("3", () -> {
+            throw failure("3");
+        });
+        catalog.detailLookup("4", () -> {
+            throw rejected();
         });
 
-        assertThatThrownBy(() -> service().getSimilarProducts("10"))
-                .isInstanceOf(ProductCatalogException.class);
+        assertThat(service().getSimilarProducts("10")).containsExactly(SHIRT);
     }
 
     @Test
-    void interruptsTheOtherLookupsWhenOneFailsAndWaitsForThemToEnd() {
+    void failsWithACatalogFailureFirstWhenNoSimilarProductCouldBeRetrieved() {
+        catalog.similarIds("10", "1", "2", "3", "404");
+        catalog.detailLookup("1", () -> {
+            throw timeout("1");
+        });
+        catalog.detailLookup("2", () -> {
+            throw failure("2");
+        });
+        catalog.detailLookup("3", () -> {
+            throw rejected();
+        });
+
+        assertThatThrownBy(() -> service().getSimilarProducts("10"))
+                .isExactlyInstanceOf(ProductCatalogException.class);
+    }
+
+    @Test
+    void failsWithATimeoutBeforeARejectionWhenNoSimilarProductCouldBeRetrieved() {
+        catalog.similarIds("10", "1", "2", "404");
+        catalog.detailLookup("1", () -> {
+            throw rejected();
+        });
+        catalog.detailLookup("2", () -> {
+            throw timeout("2");
+        });
+
+        assertThatThrownBy(() -> service().getSimilarProducts("10"))
+                .isInstanceOf(ProductCatalogTimeoutException.class);
+    }
+
+    @Test
+    void failsWithARejectionWhenEveryUnavailableProductWasRejected() {
+        catalog.similarIds("10", "1", "404");
+        catalog.detailLookup("1", () -> {
+            throw rejected();
+        });
+
+        assertThatThrownBy(() -> service().getSimilarProducts("10"))
+                .isInstanceOf(CatalogCallRejectedException.class);
+    }
+
+    @Test
+    void propagatesTheFailureOfTheSimilarIds() {
+        catalog.similarIdsLookup("10", () -> {
+            throw new ProductCatalogTimeoutException("No complete answer for the similar ids of product 10", null);
+        });
+
+        assertThatThrownBy(() -> service().getSimilarProducts("10"))
+                .isInstanceOf(ProductCatalogTimeoutException.class);
+    }
+
+    @Test
+    void propagatesAnUnexpectedFailureOfADetailLookup() {
+        catalog.similarIds("10", "1", "2");
+        catalog.product(SHIRT);
+        catalog.detailLookup("2", () -> {
+            throw new IllegalStateException("A programming error");
+        });
+
+        assertThatThrownBy(() -> service().getSimilarProducts("10"))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void doesNotTurnACancellationIntoAnUnavailableProduct() {
+        catalog.similarIds("10", "1", "2");
+        catalog.product(SHIRT);
+        catalog.detailLookup("2", () -> {
+            throw new CancellationException("Interrupted while waiting for the detail of product 2");
+        });
+
+        assertThatThrownBy(() -> service().getSimilarProducts("10"))
+                .isInstanceOf(CancellationException.class);
+    }
+
+    @Test
+    void interruptsTheOtherLookupsOnAnUnexpectedFailureAndWaitsForThemToEnd() {
         CountDownLatch slowLookupInProgress = new CountDownLatch(1);
         AtomicBoolean slowLookupInterrupted = new AtomicBoolean();
         catalog.similarIds("10", "1", "2");
@@ -132,14 +215,26 @@ class SimilarProductsServiceTest {
         });
         catalog.detailLookup("2", () -> {
             awaitAtMost(slowLookupInProgress, Duration.ofSeconds(5));
-            throw new ProductCatalogException("Empty response for the detail of product 2");
+            throw new IllegalStateException("A programming error");
         });
 
         assertThatThrownBy(() -> service().getSimilarProducts("10"))
-                .isInstanceOf(ProductCatalogException.class);
+                .isInstanceOf(IllegalStateException.class);
 
         assertThat(slowLookupInterrupted).isTrue();
         assertThat(meterRegistry.get("catalog.calls.active").gauge().value()).isZero();
+    }
+
+    private static ProductCatalogTimeoutException timeout(String productId) {
+        return new ProductCatalogTimeoutException("No complete answer for the detail of product " + productId, null);
+    }
+
+    private static ProductCatalogException failure(String productId) {
+        return new ProductCatalogException("The existing APIs answered 500 for the detail of product " + productId);
+    }
+
+    private static CatalogCallRejectedException rejected() {
+        return new CatalogCallRejectedException("No free slot to call the product catalog");
     }
 
     private SimilarProductsService service() {

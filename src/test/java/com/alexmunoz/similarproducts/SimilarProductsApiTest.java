@@ -22,7 +22,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.assertj.MockMvcTester;
-import org.springframework.web.client.HttpServerErrorException;
 
 /**
  * End-to-end tests of the agreed contract, with WireMock playing the existing APIs with
@@ -119,14 +118,64 @@ class SimilarProductsApiTest {
     }
 
     @Test
-    void abortsTheCallsInProgressWhenALookupFails() {
-        // Product 1000 answers after 5 s, product 6 fails at once
-        similarIds("8", "[1000,6]");
+    void leavesOutSimilarProductsThatFail() {
+        // Product 6 answers 500
+        assertThat(mvc.get().uri("/product/{productId}/similar", "5"))
+                .hasStatusOk()
+                .bodyJson()
+                .isStrictlyEqualTo("""
+                        [
+                          {"id":"1","name":"Shirt","price":9.99,"availability":true},
+                          {"id":"2","name":"Dress","price":19.99,"availability":true}
+                        ]""");
+    }
 
-        assertTimeout(Duration.ofSeconds(3), () -> assertThat(mvc.get().uri("/product/{productId}/similar", "8"))
-                .hasFailed()
-                .failure().hasCauseInstanceOf(HttpServerErrorException.class));
+    @Test
+    void leavesOutSimilarProductsThatTimeOutAndFreesTheirSlots() {
+        // Product 1000 answers after 5 s, beyond the timeout of 1.5 s; product 100, after 1 s
+        assertTimeout(Duration.ofSeconds(4), () -> assertThat(mvc.get().uri("/product/{productId}/similar", "2"))
+                .hasStatusOk()
+                .bodyJson()
+                .isStrictlyEqualTo("""
+                        [
+                          {"id":"3","name":"Blazer","price":29.99,"availability":false},
+                          {"id":"100","name":"Trousers","price":49.99,"availability":false}
+                        ]"""));
         assertThat(meterRegistry.get("catalog.calls.active").gauge().value()).isZero();
+    }
+
+    @Test
+    void answersGatewayTimeoutWhenTheSimilarIdsDoNotArriveInTime() {
+        existingApis.stubFor(get("/product/8/similarids").willReturn(okJson("[1]").withFixedDelay(5_000)));
+
+        assertThat(mvc.get().uri("/product/{productId}/similar", "8"))
+                .hasStatus(HttpStatus.GATEWAY_TIMEOUT);
+    }
+
+    @Test
+    void answersBadGatewayWhenTheSimilarIdsFail() {
+        existingApis.stubFor(get("/product/8/similarids").willReturn(serverError()));
+
+        assertThat(mvc.get().uri("/product/{productId}/similar", "8"))
+                .hasStatus(HttpStatus.BAD_GATEWAY);
+    }
+
+    @Test
+    void answersBadGatewayWhenNoSimilarProductCouldBeRetrieved() {
+        // Product 6 answers 500
+        similarIds("8", "[6]");
+
+        assertThat(mvc.get().uri("/product/{productId}/similar", "8"))
+                .hasStatus(HttpStatus.BAD_GATEWAY);
+    }
+
+    @Test
+    void answersGatewayTimeoutWhenEverySimilarProductTimedOut() {
+        // Product 1000 answers after 5 s, beyond the timeout of 1.5 s
+        similarIds("8", "[1000]");
+
+        assertThat(mvc.get().uri("/product/{productId}/similar", "8"))
+                .hasStatus(HttpStatus.GATEWAY_TIMEOUT);
     }
 
     @Test
