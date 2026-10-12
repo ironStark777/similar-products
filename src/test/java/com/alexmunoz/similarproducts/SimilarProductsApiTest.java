@@ -145,6 +145,16 @@ class SimilarProductsApiTest {
     }
 
     @Test
+    void answersWithinTheRequestBudget() {
+        // The similar ids take 1.4 s and product 1000 only times out 1.5 s later, but the
+        // request budget is 2 s: without it, the request would take 2.9 s
+        existingApis.stubFor(get("/product/8/similarids").willReturn(okJson("[1000]").withFixedDelay(1_400)));
+
+        assertTimeout(Duration.ofMillis(2_600), () -> assertThat(mvc.get().uri("/product/{productId}/similar", "8"))
+                .hasStatus(HttpStatus.GATEWAY_TIMEOUT));
+    }
+
+    @Test
     void answersGatewayTimeoutWhenTheSimilarIdsDoNotArriveInTime() {
         existingApis.stubFor(get("/product/8/similarids").willReturn(okJson("[1]").withFixedDelay(5_000)));
 

@@ -18,6 +18,9 @@ spring:
         read-timeout: 1500ms
 
 similar-products:
+  # Time to process a request: the similar ids, the waits for slots and the details. At the
+  # deadline, the request answers with the details found so far.
+  request-budget: 2s
   catalog-calls:
     # Calls to the existing APIs in progress at the same time. Initial value, to be tuned
     # with measurements.

@@ -16,10 +16,12 @@ import org.springframework.stereotype.Component;
  * Limits the calls to the product catalog in progress at the same time, so a burst of
  * requests cannot overload it.
  *
- * <p>A call waits for a free slot at most the permit timeout. If none frees up in time, it is
- * rejected with {@link CatalogCallRejectedException} and never started. A call interrupted
- * while it waits is cancelled and never started either. Slots are handed out in arrival
- * order.
+ * <p>A call waits for a free slot at most the permit timeout, and never beyond the deadline of
+ * its request. If no slot frees up within the permit timeout, it is rejected with
+ * {@link CatalogCallRejectedException} and never started. If the deadline ends the wait, or
+ * passes before the call can start, the call fails with {@link DeadlineExceededException}
+ * and never starts either; a slot it got is freed at once. A call interrupted while it waits
+ * is cancelled and never started. Slots are handed out in arrival order.
  *
  * <p>Metrics:
  * <ul>
@@ -30,7 +32,7 @@ import org.springframework.stereotype.Component;
  *   <li>{@code catalog.calls.active} and {@code catalog.calls.active.peak}: calls holding a
  *       slot now, and at most at the same time since startup.</li>
  *   <li>{@code catalog.calls.permit.wait}: time spent waiting for a slot, tagged
- *       {@code outcome=acquired|rejected}.</li>
+ *       {@code outcome=acquired|rejected|deadline}.</li>
  * </ul>
  */
 @Component
@@ -46,6 +48,7 @@ public class CatalogCallLimiter {
     private final AtomicInteger peakActiveCalls = new AtomicInteger();
     private final Timer acquiredWaits;
     private final Timer rejectedWaits;
+    private final Timer deadlineWaits;
 
     public CatalogCallLimiter(SimilarProductsProperties properties, MeterRegistry meterRegistry) {
         CatalogCalls catalogCalls = properties.catalogCalls();
@@ -54,6 +57,7 @@ public class CatalogCallLimiter {
         this.slots = new Semaphore(maxConcurrent, true);
         this.acquiredWaits = permitWaitTimer("acquired", meterRegistry);
         this.rejectedWaits = permitWaitTimer("rejected", meterRegistry);
+        this.deadlineWaits = permitWaitTimer("deadline", meterRegistry);
         Gauge.builder("catalog.calls.pending", pendingCalls::get)
                 .description("Calls to the product catalog waiting for a slot or in progress")
                 .register(meterRegistry);
@@ -68,19 +72,28 @@ public class CatalogCallLimiter {
     /**
      * Runs a call to the catalog once a slot is free.
      *
+     * @param deadline deadline of the request the call belongs to
      * @throws CatalogCallRejectedException if no slot frees up within the permit timeout
+     * @throws DeadlineExceededException    if the deadline ends the wait for a slot or passes
+     *                                      before the call can start
      * @throws CancellationException        if the thread is interrupted while it waits
      */
-    public <T> T call(Supplier<T> call) {
+    public <T> T call(Supplier<T> call, Deadline deadline) {
         pendingCalls.incrementAndGet();
         try {
-            acquireSlot();
-            int active = activeCalls.incrementAndGet();
-            peakActiveCalls.accumulateAndGet(active, Math::max);
+            acquireSlot(deadline);
             try {
-                return call.get();
+                if (deadline.hasPassed()) {
+                    throw new DeadlineExceededException("The request ran out of budget before calling the product catalog");
+                }
+                int active = activeCalls.incrementAndGet();
+                peakActiveCalls.accumulateAndGet(active, Math::max);
+                try {
+                    return call.get();
+                } finally {
+                    activeCalls.decrementAndGet();
+                }
             } finally {
-                activeCalls.decrementAndGet();
                 slots.release();
             }
         } finally {
@@ -88,16 +101,25 @@ public class CatalogCallLimiter {
         }
     }
 
-    private void acquireSlot() {
+    private void acquireSlot(Deadline deadline) {
+        long timeLeft = deadline.remainingNanos();
+        if (timeLeft <= 0) {
+            throw new DeadlineExceededException("No time left in the request to call the product catalog");
+        }
+        long maxWait = Math.min(permitTimeout.toNanos(), timeLeft);
         long start = System.nanoTime();
         boolean acquired;
         try {
-            acquired = slots.tryAcquire(permitTimeout.toNanos(), TimeUnit.NANOSECONDS);
+            acquired = slots.tryAcquire(maxWait, TimeUnit.NANOSECONDS);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             throw new CancellationException("Interrupted while waiting to call the product catalog");
         }
         Duration waited = Duration.ofNanos(System.nanoTime() - start);
+        if (!acquired && maxWait < permitTimeout.toNanos()) {
+            deadlineWaits.record(waited);
+            throw new DeadlineExceededException("The request ran out of budget waiting for a slot to call the product catalog");
+        }
         if (!acquired) {
             rejectedWaits.record(waited);
             throw new CatalogCallRejectedException("No free slot to call the product catalog within "

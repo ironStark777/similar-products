@@ -6,7 +6,10 @@ import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMoc
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.alexmunoz.similarproducts.application.CatalogCallLimiter;
+import com.alexmunoz.similarproducts.application.Deadline;
+import com.alexmunoz.similarproducts.application.NanoClock;
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
@@ -48,11 +51,12 @@ class CatalogCallLimitApiTest {
     void answersServiceUnavailableWithoutCallingTheExistingApisWhenNoSlotIsFree() throws InterruptedException {
         CountDownLatch slotTaken = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
+        Deadline distantDeadline = Deadline.after(Duration.ofMinutes(1), NanoClock.system());
         Thread slotHolder = Thread.ofPlatform().daemon().start(() -> catalogCalls.call(() -> {
             slotTaken.countDown();
             awaitQuietly(release);
             return null;
-        }));
+        }, distantDeadline));
         assertThat(slotTaken.await(5, TimeUnit.SECONDS)).isTrue();
 
         try {

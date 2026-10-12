@@ -28,7 +28,7 @@ sealed interface DetailLookup {
     enum Reason {
         /** The existing APIs did not answer properly. */
         ERROR,
-        /** The existing APIs did not answer completely in time. */
+        /** The existing APIs did not answer completely in time, or the request ran out of budget. */
         TIMEOUT,
         /** The call was rejected by our concurrency limit. */
         SATURATED

@@ -1,6 +1,7 @@
 package com.alexmunoz.similarproducts.infrastructure.rest;
 
 import com.alexmunoz.similarproducts.application.CatalogCallRejectedException;
+import com.alexmunoz.similarproducts.application.DeadlineExceededException;
 import com.alexmunoz.similarproducts.domain.ProductCatalogException;
 import com.alexmunoz.similarproducts.domain.ProductCatalogTimeoutException;
 import com.alexmunoz.similarproducts.domain.ProductNotFoundException;
@@ -20,7 +21,7 @@ class RestExceptionHandler {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
     }
 
-    @ExceptionHandler(ProductCatalogTimeoutException.class)
+    @ExceptionHandler({ProductCatalogTimeoutException.class, DeadlineExceededException.class})
     ProblemDetail handleCatalogTimeout() {
         return ProblemDetail.forStatusAndDetail(HttpStatus.GATEWAY_TIMEOUT,
                 "The product catalog did not answer in time");

@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 class CatalogCallLimiterTest {
 
     private static final Duration WAIT_LIMIT = Duration.ofSeconds(5);
+    private static final Deadline DISTANT_DEADLINE = Deadline.after(Duration.ofHours(1), NanoClock.system());
 
     private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
 
@@ -26,7 +27,7 @@ class CatalogCallLimiterTest {
     void runsTheCallWhenASlotIsFree() {
         CatalogCallLimiter limiter = limiter(1, Duration.ZERO);
 
-        assertThat(limiter.call(() -> "result")).isEqualTo("result");
+        assertThat(limiter.call(() -> "result", DISTANT_DEADLINE)).isEqualTo("result");
         assertThat(permitWaits("acquired").count()).isEqualTo(1);
         assertThat(activeCalls()).isZero();
         assertThat(pendingCalls()).isZero();
@@ -38,7 +39,7 @@ class CatalogCallLimiterTest {
         BlockedCall blocked = BlockedCall.start(limiter);
         AtomicBoolean started = new AtomicBoolean();
 
-        assertThatThrownBy(() -> limiter.call(() -> started.getAndSet(true)))
+        assertThatThrownBy(() -> limiter.call(() -> started.getAndSet(true), DISTANT_DEADLINE))
                 .isInstanceOf(CatalogCallRejectedException.class);
         blocked.release();
 
@@ -56,7 +57,7 @@ class CatalogCallLimiterTest {
 
         Thread waiting = Thread.ofPlatform().daemon().start(() -> {
             try {
-                waitingCall.complete(limiter.call(() -> "result"));
+                waitingCall.complete(limiter.call(() -> "result", DISTANT_DEADLINE));
             } catch (RuntimeException ex) {
                 waitingCall.completeExceptionally(ex);
             }
@@ -81,7 +82,7 @@ class CatalogCallLimiterTest {
 
         Thread waiting = Thread.ofPlatform().daemon().start(() -> {
             try {
-                limiter.call(() -> started.getAndSet(true));
+                limiter.call(() -> started.getAndSet(true), DISTANT_DEADLINE);
             } catch (RuntimeException ex) {
                 failure.set(ex);
             }
@@ -95,6 +96,67 @@ class CatalogCallLimiterTest {
         assertThat(started).isFalse();
         assertThat(permitWaits("rejected").count()).isZero();
         assertThat(pendingCalls()).isZero();
+    }
+
+    @Test
+    void doesNotStartACallOnceTheDeadlineHasPassed() {
+        CatalogCallLimiter limiter = limiter(1, Duration.ofMillis(100));
+        FakeNanoClock clock = new FakeNanoClock();
+        Deadline deadline = Deadline.after(Duration.ofSeconds(2), clock);
+        clock.advance(Duration.ofSeconds(2));
+        AtomicBoolean started = new AtomicBoolean();
+
+        assertThatThrownBy(() -> limiter.call(() -> started.getAndSet(true), deadline))
+                .isInstanceOf(DeadlineExceededException.class);
+
+        assertThat(started).isFalse();
+        assertThat(permitWaits("acquired").count() + permitWaits("rejected").count()).isZero();
+        assertThat(pendingCalls()).isZero();
+    }
+
+    @Test
+    void endsTheWaitForASlotAtTheDeadlineAsOutOfBudget() throws InterruptedException {
+        CatalogCallLimiter limiter = limiter(1, Duration.ofSeconds(30));
+        BlockedCall blocked = BlockedCall.start(limiter);
+        Deadline deadline = Deadline.after(Duration.ofMillis(100), NanoClock.system());
+        long start = System.nanoTime();
+
+        assertThatThrownBy(() -> limiter.call(() -> "result", deadline))
+                .isInstanceOf(DeadlineExceededException.class);
+
+        assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(WAIT_LIMIT);
+        assertThat(permitWaits("deadline").count()).isEqualTo(1);
+        assertThat(permitWaits("rejected").count()).isZero();
+        blocked.release();
+        assertThat(pendingCalls()).isZero();
+    }
+
+    @Test
+    void freesTheSlotWithoutStartingTheCallWhenTheDeadlinePassesWhileItWaits() throws InterruptedException {
+        CatalogCallLimiter limiter = limiter(1, WAIT_LIMIT);
+        BlockedCall blocked = BlockedCall.start(limiter);
+        FakeNanoClock clock = new FakeNanoClock();
+        Deadline deadline = Deadline.after(Duration.ofMinutes(1), clock);
+        AtomicBoolean started = new AtomicBoolean();
+        AtomicReference<RuntimeException> failure = new AtomicReference<>();
+
+        Thread waiting = Thread.ofPlatform().daemon().start(() -> {
+            try {
+                limiter.call(() -> started.getAndSet(true), deadline);
+            } catch (RuntimeException ex) {
+                failure.set(ex);
+            }
+        });
+        awaitWaitingForASlot(waiting);
+        clock.advance(Duration.ofMinutes(2));
+        blocked.release();
+        waiting.join(WAIT_LIMIT.toMillis());
+
+        assertThat(failure.get()).isInstanceOf(DeadlineExceededException.class);
+        assertThat(started).isFalse();
+        assertThat(activeCalls()).isZero();
+        assertThat(pendingCalls()).isZero();
+        assertThat(limiter.call(() -> "result", DISTANT_DEADLINE)).isEqualTo("result");
     }
 
     @Test
@@ -117,16 +179,17 @@ class CatalogCallLimiterTest {
 
         assertThatThrownBy(() -> limiter.call(() -> {
             throw new IllegalStateException("The catalog failed");
-        })).isInstanceOf(IllegalStateException.class);
+        }, DISTANT_DEADLINE)).isInstanceOf(IllegalStateException.class);
 
-        assertThat(limiter.call(() -> "result")).isEqualTo("result");
+        assertThat(limiter.call(() -> "result", DISTANT_DEADLINE)).isEqualTo("result");
         assertThat(activeCalls()).isZero();
         assertThat(pendingCalls()).isZero();
     }
 
     private CatalogCallLimiter limiter(int maxConcurrent, Duration permitTimeout) {
         return new CatalogCallLimiter(
-                new SimilarProductsProperties(new CatalogCalls(maxConcurrent, permitTimeout)), meterRegistry);
+                new SimilarProductsProperties(Duration.ofSeconds(2), new CatalogCalls(maxConcurrent, permitTimeout)),
+                meterRegistry);
     }
 
     private Timer permitWaits(String outcome) {
@@ -165,7 +228,7 @@ class CatalogCallLimiterTest {
                 started.countDown();
                 awaitRelease();
                 return null;
-            }));
+            }, DISTANT_DEADLINE));
         }
 
         static BlockedCall start(CatalogCallLimiter limiter) throws InterruptedException {

@@ -164,6 +164,7 @@ details_time_before=$(calls "$detail_uri" TOTAL_TIME)
 granted_before=$(metric catalog.calls.permit.wait COUNT outcome:acquired)
 granted_wait_before=$(metric catalog.calls.permit.wait TOTAL_TIME outcome:acquired)
 rejected_before=$(metric catalog.calls.permit.wait COUNT outcome:rejected)
+out_of_budget_before=$(metric catalog.calls.permit.wait COUNT outcome:deadline)
 
 echo "== k6 run $run_id (about 2 minutes)"
 echo "started: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$out/run.txt"
@@ -241,15 +242,18 @@ peak=$(metric catalog.calls.active.peak VALUE)
 granted_after=$(metric catalog.calls.permit.wait COUNT outcome:acquired)
 granted_wait_after=$(metric catalog.calls.permit.wait TOTAL_TIME outcome:acquired)
 rejected_after=$(metric catalog.calls.permit.wait COUNT outcome:rejected)
+out_of_budget_after=$(metric catalog.calls.permit.wait COUNT outcome:deadline)
 granted=$(delta "$granted_after" "$granted_before")
 granted_wait=$(delta "$granted_wait_after" "$granted_wait_before")
 mean_wait=$(mean_ms "$granted_wait" "$granted")
 rejected=$(delta "$rejected_after" "$rejected_before")
+out_of_budget=$(delta "$out_of_budget_after" "$out_of_budget_before")
 {
     echo "most in progress at once: $peak"
     echo "slots granted:            $granted"
     echo "mean wait for a slot:     $mean_wait"
     echo "calls rejected:           $rejected"
+    echo "out of budget waiting:    $out_of_budget"
 } | tee "$out/limit.txt"
 
 echo

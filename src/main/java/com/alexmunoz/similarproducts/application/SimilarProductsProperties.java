@@ -12,11 +12,15 @@ import org.springframework.validation.annotation.Validated;
  * Settings of the similar products feature. They are validated at startup, so a wrong value
  * stops the application instead of changing its behavior.
  *
- * @param catalogCalls limit of the calls to the product catalog
+ * @param requestBudget time to process a request: the similar ids, the waits for slots and
+ *                      the details
+ * @param catalogCalls  limit of the calls to the product catalog
  */
 @Validated
 @ConfigurationProperties("similar-products")
-public record SimilarProductsProperties(@NotNull @Valid CatalogCalls catalogCalls) {
+public record SimilarProductsProperties(
+        @NotNull @DurationMin(millis = 1) Duration requestBudget,
+        @NotNull @Valid CatalogCalls catalogCalls) {
 
     /**
      * @param maxConcurrent calls to the catalog allowed in progress at the same time

@@ -16,13 +16,14 @@ class SimilarProductsPropertiesTest {
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withUserConfiguration(PropertiesConfig.class)
             .withPropertyValues(
+                    "similar-products.request-budget=2s",
                     "similar-products.catalog-calls.max-concurrent=100",
                     "similar-products.catalog-calls.permit-timeout=100ms");
 
     @Test
-    void bindsTheLimitOfTheCatalogCalls() {
-        contextRunner.run(context -> assertThat(context.getBean(SimilarProductsProperties.class).catalogCalls())
-                .isEqualTo(new CatalogCalls(100, Duration.ofMillis(100))));
+    void bindsTheRequestBudgetAndTheLimitOfTheCatalogCalls() {
+        contextRunner.run(context -> assertThat(context.getBean(SimilarProductsProperties.class))
+                .isEqualTo(new SimilarProductsProperties(Duration.ofSeconds(2), new CatalogCalls(100, Duration.ofMillis(100)))));
     }
 
     @Test
@@ -33,15 +34,16 @@ class SimilarProductsPropertiesTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
+            "similar-products.request-budget=0ms",
             "similar-products.catalog-calls.max-concurrent=0",
             "similar-products.catalog-calls.permit-timeout=-1ms"})
-    void stopsTheStartupWithAnInvalidLimit(String invalidProperty) {
+    void stopsTheStartupWithAnInvalidValue(String invalidProperty) {
         contextRunner.withPropertyValues(invalidProperty)
                 .run(context -> assertThat(context).getFailure().hasRootCauseInstanceOf(BindValidationException.class));
     }
 
     @Test
-    void stopsTheStartupWithoutTheLimit() {
+    void stopsTheStartupWithoutTheSettings() {
         new ApplicationContextRunner().withUserConfiguration(PropertiesConfig.class)
                 .run(context -> assertThat(context).getFailure().hasRootCauseInstanceOf(BindValidationException.class));
     }
