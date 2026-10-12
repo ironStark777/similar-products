@@ -9,7 +9,8 @@
 #      granted and rejected. Calls still pending when k6 ends are waited for first, so that
 #      they count and do not overlap with the next step: until no call is pending and no slot
 #      is granted or rejected in several samples in a row, within a deadline,
-#   3. one request per scenario: status, time and products returned.
+#   3. how many of the lists answered were complete or partial, and why details were missing,
+#   4. one request per scenario: status, time and products returned.
 #
 # Usage: perf/measure.sh <path to backendDevTest>
 #
@@ -165,6 +166,11 @@ granted_before=$(metric catalog.calls.permit.wait COUNT outcome:acquired)
 granted_wait_before=$(metric catalog.calls.permit.wait TOTAL_TIME outcome:acquired)
 rejected_before=$(metric catalog.calls.permit.wait COUNT outcome:rejected)
 out_of_budget_before=$(metric catalog.calls.permit.wait COUNT outcome:deadline)
+complete_before=$(metric similar.products.responses COUNT result:complete)
+partial_before=$(metric similar.products.responses COUNT result:partial)
+unavailable_error_before=$(metric similar.products.details.unavailable COUNT reason:error)
+unavailable_timeout_before=$(metric similar.products.details.unavailable COUNT reason:timeout)
+unavailable_saturated_before=$(metric similar.products.details.unavailable COUNT reason:saturated)
 
 echo "== k6 run $run_id (about 2 minutes)"
 echo "started: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$out/run.txt"
@@ -255,6 +261,24 @@ out_of_budget=$(delta "$out_of_budget_after" "$out_of_budget_before")
     echo "calls rejected:           $rejected"
     echo "out of budget waiting:    $out_of_budget"
 } | tee "$out/limit.txt"
+
+echo
+echo "== Content of the lists answered"
+complete_after=$(metric similar.products.responses COUNT result:complete)
+partial_after=$(metric similar.products.responses COUNT result:partial)
+unavailable_error_after=$(metric similar.products.details.unavailable COUNT reason:error)
+unavailable_timeout_after=$(metric similar.products.details.unavailable COUNT reason:timeout)
+unavailable_saturated_after=$(metric similar.products.details.unavailable COUNT reason:saturated)
+complete=$(delta "$complete_after" "$complete_before")
+partial=$(delta "$partial_after" "$partial_before")
+unavailable_error=$(delta "$unavailable_error_after" "$unavailable_error_before")
+unavailable_timeout=$(delta "$unavailable_timeout_after" "$unavailable_timeout_before")
+unavailable_saturated=$(delta "$unavailable_saturated_after" "$unavailable_saturated_before")
+{
+    echo "complete lists:           $complete"
+    echo "partial lists:            $partial"
+    echo "details unavailable:      error $unavailable_error, timeout $unavailable_timeout, saturated $unavailable_saturated"
+} | tee "$out/content.txt"
 
 echo
 echo "== Requests per scenario and status"

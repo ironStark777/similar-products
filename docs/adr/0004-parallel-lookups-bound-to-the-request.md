@@ -27,7 +27,7 @@ Each call has a timeout of 1.5 s: the `read-timeout` of the HTTP client, which S
 
 ## Consequences
 - **Positive:** a request takes as long as its slowest lookup, and its processing stays within the budget; a failing or slow product no longer costs the others.
-- **Negative / trade-offs:** the client cannot tell a partial list from a complete one, since the agreed contract has no field for it. Interruption only requests the cancellation: a lookup that does not respond to it keeps running after the response, and its HTTP timeout is a second protection, not a guarantee that it ends. A timeout during the body is told apart by a heuristic on the elapsed time.
+- **Negative / trade-offs:** the client cannot tell a partial list from a complete one, since the agreed contract has no field for it; the `similar.products.responses` metric counts both, and `similar.products.details.unavailable` why details were missing. Interruption only requests the cancellation: a lookup that does not respond to it keeps running after the response, and its HTTP timeout is a second protection, not a guarantee that it ends. A timeout during the body is told apart by a heuristic on the elapsed time.
 
 ## Evolution
 - **2026-10-12:** calls have a timeout of 1.5 s, and an expected failure of a detail leaves the product out instead of failing the request.

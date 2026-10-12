@@ -9,9 +9,14 @@ import com.alexmunoz.similarproducts.domain.ProductCatalogException;
 import com.alexmunoz.similarproducts.domain.ProductCatalogTimeoutException;
 import com.alexmunoz.similarproducts.domain.ProductDetail;
 import com.alexmunoz.similarproducts.domain.ProductNotFoundException;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +37,12 @@ import org.springframework.stereotype.Service;
  * <p>If no similar product could be retrieved and at least one was unavailable, the request
  * fails with the most severe failure among them (see {@link Reason}). Similar products that do
  * not exist are left out.
+ *
+ * <p>Metrics, to tell complete answers from partial ones under load:
+ * {@code similar.products.responses}, the lists answered, tagged
+ * {@code result=complete|partial}, and {@code similar.products.details.unavailable}, the
+ * details that could not be retrieved, tagged {@code reason=error|timeout|saturated}. A
+ * similar product that does not exist does not make a list partial.
  */
 @Service
 public class SimilarProductsService {
@@ -42,15 +53,27 @@ public class SimilarProductsService {
     private final CatalogCallLimiter catalogCalls;
     private final Duration requestBudget;
     private final NanoClock clock;
+    private final Counter completeResponses;
+    private final Counter partialResponses;
+    private final Map<Reason, Counter> unavailableDetails = new EnumMap<>(Reason.class);
 
     public SimilarProductsService(ProductCatalog productCatalog,
                                   CatalogCallLimiter catalogCalls,
                                   SimilarProductsProperties properties,
-                                  NanoClock clock) {
+                                  NanoClock clock,
+                                  MeterRegistry meterRegistry) {
         this.productCatalog = productCatalog;
         this.catalogCalls = catalogCalls;
         this.requestBudget = properties.requestBudget();
         this.clock = clock;
+        this.completeResponses = responsesCounter("complete", meterRegistry);
+        this.partialResponses = responsesCounter("partial", meterRegistry);
+        for (Reason reason : Reason.values()) {
+            unavailableDetails.put(reason, Counter.builder("similar.products.details.unavailable")
+                    .description("Details of similar products that could not be retrieved")
+                    .tag("reason", reason.name().toLowerCase(Locale.ROOT))
+                    .register(meterRegistry));
+        }
     }
 
     /**
@@ -78,15 +101,19 @@ public class SimilarProductsService {
                 .map(Found.class::cast)
                 .map(Found::product)
                 .toList();
+        List<Unavailable> unavailable = lookups.stream()
+                .filter(Unavailable.class::isInstance)
+                .map(Unavailable.class::cast)
+                .toList();
+        unavailable.forEach(detail -> unavailableDetails.get(detail.reason()).increment());
+
         if (found.isEmpty()) {
-            Optional<Unavailable> mostSevere = lookups.stream()
-                    .filter(Unavailable.class::isInstance)
-                    .map(Unavailable.class::cast)
-                    .min(Comparator.comparing(Unavailable::reason));
+            Optional<Unavailable> mostSevere = unavailable.stream().min(Comparator.comparing(Unavailable::reason));
             if (mostSevere.isPresent()) {
                 throw mostSevere.get().failure();
             }
         }
+        (unavailable.isEmpty() ? completeResponses : partialResponses).increment();
         return found;
     }
 
@@ -139,6 +166,13 @@ public class SimilarProductsService {
     private static Unavailable outOfBudget(String productId, String similarId) {
         return unavailable(productId, similarId, Reason.TIMEOUT, new DeadlineExceededException(
                 "No answer within the request budget for the detail of product " + similarId));
+    }
+
+    private static Counter responsesCounter(String result, MeterRegistry meterRegistry) {
+        return Counter.builder("similar.products.responses")
+                .description("Lists of similar products answered")
+                .tag("result", result)
+                .register(meterRegistry);
     }
 
     private static Unavailable unavailable(String productId, String similarId, Reason reason, RuntimeException failure) {

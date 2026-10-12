@@ -323,7 +323,8 @@ class SimilarProductsServiceTest {
             detailLookedUp.set(true);
             return Optional.of(SHIRT);
         });
-        SimilarProductsService service = new SimilarProductsService(catalog, limiter, properties(Duration.ofSeconds(2)), clock);
+        SimilarProductsService service =
+                new SimilarProductsService(catalog, limiter, properties(Duration.ofSeconds(2)), clock, meterRegistry);
 
         assertThatThrownBy(() -> service.getSimilarProducts("10"))
                 .isInstanceOf(DeadlineExceededException.class);
@@ -331,12 +332,61 @@ class SimilarProductsServiceTest {
         assertThat(detailLookedUp).isFalse();
     }
 
+    @Test
+    void countsACompleteAnswerEvenWithSimilarProductsThatDoNotExist() {
+        catalog.similarIds("10", "1", "404");
+        catalog.product(SHIRT);
+
+        service().getSimilarProducts("10");
+
+        assertThat(counter("similar.products.responses", "result", "complete")).isEqualTo(1);
+        assertThat(counter("similar.products.responses", "result", "partial")).isZero();
+    }
+
+    @Test
+    void countsAPartialAnswerAndWhyEachDetailIsMissing() {
+        catalog.similarIds("10", "1", "2", "3");
+        catalog.product(SHIRT);
+        catalog.detailLookup("2", () -> {
+            throw timeout("2");
+        });
+        catalog.detailLookup("3", () -> {
+            throw rejected();
+        });
+
+        service().getSimilarProducts("10");
+
+        assertThat(counter("similar.products.responses", "result", "partial")).isEqualTo(1);
+        assertThat(counter("similar.products.responses", "result", "complete")).isZero();
+        assertThat(counter("similar.products.details.unavailable", "reason", "timeout")).isEqualTo(1);
+        assertThat(counter("similar.products.details.unavailable", "reason", "saturated")).isEqualTo(1);
+        assertThat(counter("similar.products.details.unavailable", "reason", "error")).isZero();
+    }
+
+    @Test
+    void countsTheUnavailableDetailsOfAFailedRequestButNoAnswer() {
+        catalog.similarIds("10", "1");
+        catalog.detailLookup("1", () -> {
+            throw failure("1");
+        });
+
+        assertThatThrownBy(() -> service().getSimilarProducts("10")).isInstanceOf(ProductCatalogException.class);
+
+        assertThat(counter("similar.products.details.unavailable", "reason", "error")).isEqualTo(1);
+        assertThat(counter("similar.products.responses", "result", "complete")
+                + counter("similar.products.responses", "result", "partial")).isZero();
+    }
+
+    private double counter(String name, String tag, String value) {
+        return meterRegistry.get(name).tag(tag, value).counter().count();
+    }
+
     private SimilarProductsService service() {
         return service(DISTANT_BUDGET);
     }
 
     private SimilarProductsService service(Duration requestBudget) {
-        return new SimilarProductsService(catalog, limiter, properties(requestBudget), NanoClock.system());
+        return new SimilarProductsService(catalog, limiter, properties(requestBudget), NanoClock.system(), meterRegistry);
     }
 
     private static SimilarProductsProperties properties(Duration requestBudget) {
