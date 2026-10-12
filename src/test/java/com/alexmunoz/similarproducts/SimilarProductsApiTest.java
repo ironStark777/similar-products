@@ -184,6 +184,7 @@ class SimilarProductsApiTest {
 
         assertThat(mvc.get().uri("/actuator/health")).hasStatusOk();
         assertThat(mvc.get().uri("/actuator/metrics/http.client.requests")).hasStatusOk();
+        assertThat(mvc.get().uri("/actuator/metrics/catalog.calls.pending")).hasStatusOk();
         assertThat(mvc.get().uri("/actuator/metrics/catalog.calls.active")).hasStatusOk();
         assertThat(mvc.get().uri("/actuator/metrics/catalog.calls.active.peak")).hasStatusOk();
         assertThat(mvc.get().uri("/actuator/metrics/catalog.calls.permit.wait")).hasStatusOk();

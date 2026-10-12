@@ -6,9 +6,9 @@
 #      failed, from the k6 warnings,
 #   2. the real calls made to the existing APIs during that run, with their mean duration,
 #      and how their concurrency limit behaved: most calls in progress at once, slots
-#      granted and rejected. Calls still in progress when k6 ends are waited for first, so
-#      that they count and do not overlap with the next step: until no call is in progress
-#      and no slot is granted or rejected in several samples in a row, within a deadline,
+#      granted and rejected. Calls still pending when k6 ends are waited for first, so that
+#      they count and do not overlap with the next step: until no call is pending and no slot
+#      is granted or rejected in several samples in a row, within a deadline,
 #   3. one request per scenario: status, time and products returned.
 #
 # Usage: perf/measure.sh <path to backendDevTest>
@@ -28,9 +28,11 @@ similar_ids_uri="/product/%7BproductId%7D/similarids"
 detail_uri="/product/%7BproductId%7D"
 # Longest wait for the calls still in progress when k6 ends; the slowest mock answers after 50 s
 max_pending_wait=90
-# Samples in a row, one second apart, with no call in progress and no slot granted or rejected
-# for the pending calls to count as finished: much longer than the wait for a slot (100 ms),
-# so a call still waiting for a slot or about to start would show up
+# Samples in a row, one second apart, with no call pending and no slot granted or rejected for
+# the application to count as idle. catalog.calls.pending counts the calls waiting for a slot
+# or in progress, but not a task about to enter the limiter, nor the moment between getting
+# the similar ids and starting the lookups of their details: the samples cover those gaps in
+# practice, though they are not a guarantee
 settled_samples=3
 # Longest time for each read of the application metrics, in seconds
 metrics_max_time=5
@@ -178,30 +180,38 @@ fi
 grep -E '^ *(http_req_duration|http_reqs|iterations)\.*:' "$out/k6.txt" || echo "(no summary in the k6 output)"
 
 echo
-echo "== Calls to the existing APIs still in progress when k6 ended"
+echo "== Calls to the existing APIs still pending when k6 ended"
 pending_start=$SECONDS
 pending_deadline=$((pending_start + max_pending_wait))
-pending=$(pending_metric catalog.calls.active VALUE)
+# Versions before catalog.calls.pending only have catalog.calls.active
+pending_gauge=catalog.calls.pending
+pending=$(pending_metric "$pending_gauge" VALUE)
 if [ "$pending" = "-" ]; then
-    echo "unknown: this version has no catalog.calls.active metric" | tee "$out/pending.txt"
+    pending_gauge=catalog.calls.active
+    pending=$(pending_metric "$pending_gauge" VALUE)
+fi
+if [ "$pending" = "-" ]; then
+    echo "unknown: this version has no catalog.calls.pending or catalog.calls.active metric" \
+        | tee "$out/pending.txt"
 else
-    # Settled: the same sample, with no call in progress, several times in a row
+    # Idle: the same sample, with no call pending, several times in a row
     previous=""
     settled=1
     while [ "$settled" -lt "$settled_samples" ]; do
         sleep 1
-        active=$(pending_metric catalog.calls.active VALUE)
+        pending_now=$(pending_metric "$pending_gauge" VALUE)
         granted_now=$(pending_metric catalog.calls.permit.wait COUNT outcome:acquired)
         rejected_now=$(pending_metric catalog.calls.permit.wait COUNT outcome:rejected)
-        sample="$active $granted_now $rejected_now"
-        if [ "$active" = 0 ] && [ "$sample" = "$previous" ]; then
+        sample="$pending_now $granted_now $rejected_now"
+        if [ "$pending_now" = 0 ] && [ "$sample" = "$previous" ]; then
             settled=$((settled + 1))
         else
             settled=1
         fi
         previous="$sample"
     done
-    echo "$pending, all finished after waiting $((SECONDS - pending_start))s" | tee "$out/pending.txt"
+    echo "$pending ($pending_gauge), all finished after waiting $((SECONDS - pending_start))s" \
+        | tee "$out/pending.txt"
 fi
 
 echo

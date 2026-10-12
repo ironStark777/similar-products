@@ -29,6 +29,7 @@ class CatalogCallLimiterTest {
         assertThat(limiter.call(() -> "result")).isEqualTo("result");
         assertThat(permitWaits("acquired").count()).isEqualTo(1);
         assertThat(activeCalls()).isZero();
+        assertThat(pendingCalls()).isZero();
     }
 
     @Test
@@ -44,6 +45,7 @@ class CatalogCallLimiterTest {
         assertThat(started).isFalse();
         assertThat(permitWaits("rejected").count()).isEqualTo(1);
         assertThat(permitWaits("rejected").totalTime(TimeUnit.MILLISECONDS)).isGreaterThanOrEqualTo(50);
+        assertThat(pendingCalls()).isZero();
     }
 
     @Test
@@ -60,10 +62,14 @@ class CatalogCallLimiterTest {
             }
         });
         awaitWaitingForASlot(waiting);
+        // A call waiting for a slot is pending, not active
+        assertThat(pendingCalls()).isEqualTo(2);
+        assertThat(activeCalls()).isEqualTo(1);
         blocked.release();
 
         assertThat(waitingCall).succeedsWithin(WAIT_LIMIT).isEqualTo("result");
         assertThat(permitWaits("rejected").count()).isZero();
+        assertThat(pendingCalls()).isZero();
     }
 
     @Test
@@ -88,6 +94,7 @@ class CatalogCallLimiterTest {
         assertThat(failure.get()).isInstanceOf(CancellationException.class);
         assertThat(started).isFalse();
         assertThat(permitWaits("rejected").count()).isZero();
+        assertThat(pendingCalls()).isZero();
     }
 
     @Test
@@ -114,6 +121,7 @@ class CatalogCallLimiterTest {
 
         assertThat(limiter.call(() -> "result")).isEqualTo("result");
         assertThat(activeCalls()).isZero();
+        assertThat(pendingCalls()).isZero();
     }
 
     private CatalogCallLimiter limiter(int maxConcurrent, Duration permitTimeout) {
@@ -123,6 +131,10 @@ class CatalogCallLimiterTest {
 
     private Timer permitWaits(String outcome) {
         return meterRegistry.get("catalog.calls.permit.wait").tag("outcome", outcome).timer();
+    }
+
+    private double pendingCalls() {
+        return meterRegistry.get("catalog.calls.pending").gauge().value();
     }
 
     private double activeCalls() {
