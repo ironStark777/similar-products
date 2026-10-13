@@ -26,13 +26,15 @@ import org.springframework.stereotype.Service;
  * Builds the list of similar products for a given one.
  *
  * <p>The whole request works within one deadline, the request budget, which covers the
- * similar ids, the waits for slots and the details. The details are looked up in parallel
- * within a {@link LookupScope}, and every call to the catalog goes through
- * {@link CatalogCallLimiter}. Each lookup ends in a {@link DetailLookup}: an expected failure
- * (the catalog fails or times out, our limit rejects the call or the deadline passes) leaves
- * that product out instead of failing the request, so it does not cancel the other lookups.
- * Anything else, such as a programming error or a cancellation, still propagates. At the
- * deadline, the request answers with the details already found.
+ * similar ids, the waits for slots and the details. The similar ids are looked up for each
+ * request. The details are looked up in parallel within a {@link LookupScope}, through
+ * {@link DetailLookupCache}, which shares the loads in progress and caches their results.
+ * Every call to the catalog goes through {@link CatalogCallLimiter}. Each lookup ends in a
+ * {@link DetailLookup}: an expected failure (the catalog fails or times out, our limit rejects
+ * the call or the deadline passes) leaves that product out instead of failing the request, so
+ * it does not cancel the other lookups. Anything else, such as a programming error or a
+ * cancellation, still propagates. At the deadline, the request answers with the details
+ * already found; the loads it stops waiting for go on, for the requests that come next.
  *
  * <p>If no similar product could be retrieved and at least one was unavailable, the request
  * fails with the most severe failure among them (see {@link Reason}). Similar products that do
@@ -51,6 +53,7 @@ public class SimilarProductsService {
 
     private final ProductCatalog productCatalog;
     private final CatalogCallLimiter catalogCalls;
+    private final DetailLookupCache detailLookups;
     private final Duration requestBudget;
     private final NanoClock clock;
     private final Counter completeResponses;
@@ -59,11 +62,13 @@ public class SimilarProductsService {
 
     public SimilarProductsService(ProductCatalog productCatalog,
                                   CatalogCallLimiter catalogCalls,
+                                  DetailLookupCache detailLookups,
                                   SimilarProductsProperties properties,
                                   NanoClock clock,
                                   MeterRegistry meterRegistry) {
         this.productCatalog = productCatalog;
         this.catalogCalls = catalogCalls;
+        this.detailLookups = detailLookups;
         this.requestBudget = properties.requestBudget();
         this.clock = clock;
         this.completeResponses = responsesCounter("complete", meterRegistry);
@@ -148,23 +153,36 @@ public class SimilarProductsService {
 
     private DetailLookup lookUpDetail(String productId, String similarId, Deadline deadline) {
         try {
-            return catalogCalls.call(() -> productCatalog.findById(similarId), deadline)
-                    .<DetailLookup>map(Found::new)
-                    .orElseGet(NotFound::new);
-        } catch (ProductCatalogTimeoutException | DeadlineExceededException ex) {
-            return unavailable(productId, similarId, Reason.TIMEOUT, ex);
-        } catch (ProductCatalogException ex) {
-            return unavailable(productId, similarId, Reason.ERROR, ex);
-        } catch (CatalogCallRejectedException ex) {
-            return unavailable(productId, similarId, Reason.SATURATED, ex);
+            return detailLookups.lookUp(similarId, deadline, this::loadDetail);
+        } catch (DeadlineExceededException ex) {
+            return outOfBudget(productId, similarId);
         }
     }
 
     /**
-     * A lookup that had not finished at the deadline.
+     * Loads a detail for every request waiting for it, so it is bounded by the limits of a
+     * call to the catalog, not by the deadline of any of those requests.
+     */
+    private DetailLookup loadDetail(String productId) {
+        try {
+            return catalogCalls.call(() -> productCatalog.findById(productId), Deadline.none())
+                    .<DetailLookup>map(Found::new)
+                    .orElseGet(NotFound::new);
+        } catch (ProductCatalogTimeoutException ex) {
+            return unavailable(productId, Reason.TIMEOUT, ex);
+        } catch (ProductCatalogException ex) {
+            return unavailable(productId, Reason.ERROR, ex);
+        } catch (CatalogCallRejectedException ex) {
+            return unavailable(productId, Reason.SATURATED, ex);
+        }
+    }
+
+    /**
+     * A lookup that did not finish before the deadline.
      */
     private static Unavailable outOfBudget(String productId, String similarId) {
-        return unavailable(productId, similarId, Reason.TIMEOUT, new DeadlineExceededException(
+        log.debug("Similar product {} of product {} left out, out of budget", similarId, productId);
+        return new Unavailable(Reason.TIMEOUT, new DeadlineExceededException(
                 "No answer within the request budget for the detail of product " + similarId));
     }
 
@@ -175,8 +193,8 @@ public class SimilarProductsService {
                 .register(meterRegistry);
     }
 
-    private static Unavailable unavailable(String productId, String similarId, Reason reason, RuntimeException failure) {
-        log.debug("Similar product {} of product {} left out, {}: {}", similarId, productId, reason, failure.getMessage());
+    private static Unavailable unavailable(String productId, Reason reason, RuntimeException failure) {
+        log.debug("Detail of product {} unavailable, {}: {}", productId, reason, failure.getMessage());
         return new Unavailable(reason, failure);
     }
 }

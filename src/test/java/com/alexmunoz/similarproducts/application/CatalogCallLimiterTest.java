@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.fail;
 
 import com.alexmunoz.similarproducts.application.SimilarProductsProperties.CatalogCalls;
+import com.alexmunoz.similarproducts.application.SimilarProductsProperties.DetailCache;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
@@ -188,7 +189,8 @@ class CatalogCallLimiterTest {
 
     private CatalogCallLimiter limiter(int maxConcurrent, Duration permitTimeout) {
         return new CatalogCallLimiter(
-                new SimilarProductsProperties(Duration.ofSeconds(2), new CatalogCalls(maxConcurrent, permitTimeout)),
+                new SimilarProductsProperties(Duration.ofSeconds(2), new CatalogCalls(maxConcurrent, permitTimeout),
+                        new DetailCache(Duration.ofSeconds(30), Duration.ofSeconds(5), 100)),
                 meterRegistry);
     }
 

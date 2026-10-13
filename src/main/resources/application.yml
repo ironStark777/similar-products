@@ -27,6 +27,13 @@ similar-products:
     max-concurrent: 100
     # How long a call waits for a free slot before it is rejected; 0 rejects it at once.
     permit-timeout: 100ms
+  detail-cache:
+    # How long a detail stays cached, from the end of its load; reads do not extend it.
+    # Unavailable details are not cached, so the next request tries again.
+    found-ttl: 30s
+    not-found-ttl: 5s
+    # Details kept at most
+    maximum-size: 10000
 
 management:
   endpoints:

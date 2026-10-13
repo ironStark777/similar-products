@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.fail;
 
 import com.alexmunoz.similarproducts.application.SimilarProductsProperties.CatalogCalls;
+import com.alexmunoz.similarproducts.application.SimilarProductsProperties.DetailCache;
 import com.alexmunoz.similarproducts.domain.ProductCatalogException;
 import com.alexmunoz.similarproducts.domain.ProductCatalogTimeoutException;
 import com.alexmunoz.similarproducts.domain.ProductDetail;
@@ -18,9 +19,11 @@ import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 import org.junit.jupiter.api.Test;
 
@@ -33,10 +36,13 @@ class SimilarProductsServiceTest {
     /** Long enough not to interfere with the tests that are not about it. */
     private static final Duration DISTANT_BUDGET = Duration.ofMinutes(1);
     private static final Duration WAIT_LIMIT = Duration.ofSeconds(5);
+    private static final DetailCache DETAIL_CACHE = new DetailCache(Duration.ofSeconds(30), Duration.ofSeconds(5), 100);
 
     private final FakeProductCatalog catalog = new FakeProductCatalog();
     private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
     private final CatalogCallLimiter limiter = new CatalogCallLimiter(properties(DISTANT_BUDGET), meterRegistry);
+    private final DetailLookupCache detailLookups = new DetailLookupCache(DETAIL_CACHE, NanoClock.system(),
+            Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory()));
 
     @Test
     void returnsTheDetailOfEachSimilarProductInSimilarityOrder() {
@@ -109,8 +115,26 @@ class SimilarProductsServiceTest {
         service().getSimilarProducts("10");
 
         // The similar ids, plus one detail per distinct product
-        assertThat(meterRegistry.get("catalog.calls.permit.wait").tag("outcome", "acquired").timer().count())
-                .isEqualTo(3);
+        assertThat(acquiredSlots()).isEqualTo(3);
+    }
+
+    @Test
+    void answersCachedDetailsWithoutCallingTheCatalogOrTakingASlot() {
+        AtomicInteger shirtLoads = new AtomicInteger();
+        catalog.similarIds("10", "1", "2");
+        catalog.detailLookup("1", () -> {
+            shirtLoads.incrementAndGet();
+            return Optional.of(SHIRT);
+        });
+        catalog.product(DRESS);
+        service().getSimilarProducts("10");
+        long slotsBefore = acquiredSlots();
+
+        assertThat(service().getSimilarProducts("10")).containsExactly(SHIRT, DRESS);
+
+        assertThat(shirtLoads).hasValue(1);
+        // Only the similar ids, which are not cached
+        assertThat(acquiredSlots() - slotsBefore).isEqualTo(1);
     }
 
     @Test
@@ -207,27 +231,30 @@ class SimilarProductsServiceTest {
     }
 
     @Test
-    void interruptsTheOtherLookupsOnAnUnexpectedFailureAndWaitsForThemToEnd() {
-        CountDownLatch slowLookupInProgress = new CountDownLatch(1);
-        AtomicBoolean slowLookupInterrupted = new AtomicBoolean();
+    void stopsWaitingForTheOtherDetailsOnAnUnexpectedFailureWithoutCancellingTheirLoads() {
+        CountDownLatch slowLoadInProgress = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicBoolean slowLoadInterrupted = new AtomicBoolean();
         catalog.similarIds("10", "1", "2");
         catalog.detailLookup("1", () -> {
-            slowLookupInProgress.countDown();
-            // Never opens: only an interrupt ends the wait early
-            awaitAtMost(new CountDownLatch(1), Duration.ofSeconds(5));
-            slowLookupInterrupted.set(Thread.currentThread().isInterrupted());
+            slowLoadInProgress.countDown();
+            awaitAtMost(release, WAIT_LIMIT);
+            slowLoadInterrupted.set(Thread.currentThread().isInterrupted());
             return Optional.of(SHIRT);
         });
         catalog.detailLookup("2", () -> {
-            awaitAtMost(slowLookupInProgress, Duration.ofSeconds(5));
+            awaitAtMost(slowLoadInProgress, WAIT_LIMIT);
             throw new IllegalStateException("A programming error");
         });
 
         assertThatThrownBy(() -> service().getSimilarProducts("10"))
                 .isInstanceOf(IllegalStateException.class);
 
-        assertThat(slowLookupInterrupted).isTrue();
-        assertThat(meterRegistry.get("catalog.calls.active").gauge().value()).isZero();
+        // The slow load is still in progress, for the requests that come next
+        assertThat(gauge("catalog.calls.active")).isEqualTo(1);
+        release.countDown();
+        awaitNoPendingCalls();
+        assertThat(slowLoadInterrupted).isFalse();
     }
 
     private static ProductCatalogTimeoutException timeout(String productId) {
@@ -247,9 +274,8 @@ class SimilarProductsServiceTest {
         CountDownLatch release = new CountDownLatch(1);
         catalog.similarIds("10", "1", "2");
         catalog.product(SHIRT);
-        // Ignores the interrupt: only the test ends it
         catalog.detailLookup("2", () -> {
-            awaitIgnoringInterrupts(release);
+            awaitAtMost(release, WAIT_LIMIT);
             return Optional.of(DRESS);
         });
         long start = System.nanoTime();
@@ -258,30 +284,33 @@ class SimilarProductsServiceTest {
 
         assertThat(similarProducts).containsExactly(SHIRT);
         assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(WAIT_LIMIT);
-        // The lookup still running keeps its slot until it really ends
+        // The load goes on after the response, holding its slot
         assertThat(gauge("catalog.calls.active")).isEqualTo(1);
         release.countDown();
         awaitNoPendingCalls();
     }
 
     @Test
-    void interruptsTheLookupsStillRunningWhenTheBudgetRunsOut() {
-        CountDownLatch interrupted = new CountDownLatch(1);
+    void keepsLoadingADetailPastTheDeadlineForTheRequestsThatComeNext() {
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger dressLoads = new AtomicInteger();
+        AtomicBoolean dressLoadInterrupted = new AtomicBoolean();
         catalog.similarIds("10", "1", "2");
         catalog.product(SHIRT);
         catalog.detailLookup("2", () -> {
-            // Never opens: only an interrupt ends the wait early
-            awaitAtMost(new CountDownLatch(1), WAIT_LIMIT.multipliedBy(2));
-            if (Thread.currentThread().isInterrupted()) {
-                interrupted.countDown();
-            }
+            dressLoads.incrementAndGet();
+            awaitAtMost(release, WAIT_LIMIT);
+            dressLoadInterrupted.set(Thread.currentThread().isInterrupted());
             return Optional.of(DRESS);
         });
 
         assertThat(service(Duration.ofMillis(300)).getSimilarProducts("10")).containsExactly(SHIRT);
-
-        assertThat(awaitAtMost(interrupted, WAIT_LIMIT)).isTrue();
+        release.countDown();
         awaitNoPendingCalls();
+
+        assertThat(service().getSimilarProducts("10")).containsExactly(SHIRT, DRESS);
+        assertThat(dressLoads).hasValue(1);
+        assertThat(dressLoadInterrupted).isFalse();
     }
 
     @Test
@@ -301,14 +330,19 @@ class SimilarProductsServiceTest {
 
     @Test
     void failsWithATimeoutWhenNoDetailArrivesWithinTheBudget() {
+        CountDownLatch release = new CountDownLatch(1);
         catalog.similarIds("10", "1");
         catalog.detailLookup("1", () -> {
-            awaitAtMost(new CountDownLatch(1), WAIT_LIMIT.multipliedBy(2));
+            awaitAtMost(release, WAIT_LIMIT);
             return Optional.of(SHIRT);
         });
 
-        assertThatThrownBy(() -> service(Duration.ofMillis(300)).getSimilarProducts("10"))
-                .isInstanceOf(DeadlineExceededException.class);
+        try {
+            assertThatThrownBy(() -> service(Duration.ofMillis(300)).getSimilarProducts("10"))
+                    .isInstanceOf(DeadlineExceededException.class);
+        } finally {
+            release.countDown();
+        }
     }
 
     @Test
@@ -323,8 +357,8 @@ class SimilarProductsServiceTest {
             detailLookedUp.set(true);
             return Optional.of(SHIRT);
         });
-        SimilarProductsService service =
-                new SimilarProductsService(catalog, limiter, properties(Duration.ofSeconds(2)), clock, meterRegistry);
+        SimilarProductsService service = new SimilarProductsService(
+                catalog, limiter, detailLookups, properties(Duration.ofSeconds(2)), clock, meterRegistry);
 
         assertThatThrownBy(() -> service.getSimilarProducts("10"))
                 .isInstanceOf(DeadlineExceededException.class);
@@ -386,11 +420,16 @@ class SimilarProductsServiceTest {
     }
 
     private SimilarProductsService service(Duration requestBudget) {
-        return new SimilarProductsService(catalog, limiter, properties(requestBudget), NanoClock.system(), meterRegistry);
+        return new SimilarProductsService(
+                catalog, limiter, detailLookups, properties(requestBudget), NanoClock.system(), meterRegistry);
     }
 
     private static SimilarProductsProperties properties(Duration requestBudget) {
-        return new SimilarProductsProperties(requestBudget, new CatalogCalls(10, Duration.ofMillis(100)));
+        return new SimilarProductsProperties(requestBudget, new CatalogCalls(10, Duration.ofMillis(100)), DETAIL_CACHE);
+    }
+
+    private long acquiredSlots() {
+        return meterRegistry.get("catalog.calls.permit.wait").tag("outcome", "acquired").timer().count();
     }
 
     private double gauge(String name) {
@@ -398,7 +437,7 @@ class SimilarProductsServiceTest {
     }
 
     /**
-     * Waits until every call has left the limiter: the lookups left behind end on their own.
+     * Waits until every call has left the limiter: the loads left behind end on their own.
      */
     private void awaitNoPendingCalls() {
         long deadline = System.nanoTime() + WAIT_LIMIT.toNanos();
@@ -407,24 +446,6 @@ class SimilarProductsServiceTest {
                 fail("Calls to the catalog still pending");
             }
             LockSupport.parkNanos(1_000_000);
-        }
-    }
-
-    /**
-     * Waits for the latch, going on waiting when interrupted; the interrupt stays set.
-     */
-    private static void awaitIgnoringInterrupts(CountDownLatch latch) {
-        boolean interrupted = false;
-        long deadline = System.nanoTime() + WAIT_LIMIT.multipliedBy(2).toNanos();
-        while (latch.getCount() > 0 && System.nanoTime() < deadline) {
-            try {
-                latch.await(10, TimeUnit.MILLISECONDS);
-            } catch (InterruptedException ex) {
-                interrupted = true;
-            }
-        }
-        if (interrupted) {
-            Thread.currentThread().interrupt();
         }
     }
 

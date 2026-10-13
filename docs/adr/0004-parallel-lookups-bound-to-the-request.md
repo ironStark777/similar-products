@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-10-12
 - **Authors:** Alex Muñoz
-- **Related:** ea124ea, ADR-0002, ADR-0003
+- **Related:** ea124ea, ADR-0002, ADR-0003, ADR-0005
 
 ## Context
 The details of the similar products are independent of each other, but looking them up one after another adds up their latencies. The lookups belong to the request: one still running after the request has ended holds a slot (ADR-0003) whose result nobody will use. Some products fail or are very slow (up to 50 s in the mocks), and one of them should not cost the client the others.
@@ -32,3 +32,4 @@ Each call has a timeout of 1.5 s: the `read-timeout` of the HTTP client, which S
 ## Evolution
 - **2026-10-12:** calls have a timeout of 1.5 s, and an expected failure of a detail leaves the product out instead of failing the request.
 - **2026-10-12:** each request has a budget of 2 s; at the deadline it answers with what has arrived, without waiting for the cleanup.
+- **2026-10-13:** the details are loaded through a shared cache (ADR-0005). At the deadline or on an unexpected failure, the request stops waiting for them, but their loads are no longer cancelled: they go on for the requests that come next, within the limits of a call. The similar ids are still cancelled as before.

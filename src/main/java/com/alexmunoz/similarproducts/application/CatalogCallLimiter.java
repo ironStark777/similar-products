@@ -72,7 +72,9 @@ public class CatalogCallLimiter {
     /**
      * Runs a call to the catalog once a slot is free.
      *
-     * @param deadline deadline of the request the call belongs to
+     * @param deadline deadline of the request the call belongs to, or {@link Deadline#none()}
+     *                 for a call that belongs to no request, which then waits for a slot only
+     *                 the permit timeout
      * @throws CatalogCallRejectedException if no slot frees up within the permit timeout
      * @throws DeadlineExceededException    if the deadline ends the wait for a slot or passes
      *                                      before the call can start

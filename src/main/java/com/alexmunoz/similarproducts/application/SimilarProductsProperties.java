@@ -15,12 +15,14 @@ import org.springframework.validation.annotation.Validated;
  * @param requestBudget time to process a request: the similar ids, the waits for slots and
  *                      the details
  * @param catalogCalls  limit of the calls to the product catalog
+ * @param detailCache   cache of the details of products
  */
 @Validated
 @ConfigurationProperties("similar-products")
 public record SimilarProductsProperties(
         @NotNull @DurationMin(millis = 1) Duration requestBudget,
-        @NotNull @Valid CatalogCalls catalogCalls) {
+        @NotNull @Valid CatalogCalls catalogCalls,
+        @NotNull @Valid DetailCache detailCache) {
 
     /**
      * @param maxConcurrent calls to the catalog allowed in progress at the same time
@@ -30,5 +32,20 @@ public record SimilarProductsProperties(
     public record CatalogCalls(
             @Positive int maxConcurrent,
             @NotNull @DurationMin(millis = 0) Duration permitTimeout) {
+    }
+
+    /**
+     * Unavailable details are never cached, so the next request tries again.
+     *
+     * @param foundTtl    how long a detail found stays cached, from the end of its load; reads
+     *                    do not extend it
+     * @param notFoundTtl how long a product that does not exist stays cached, counted the same
+     *                    way
+     * @param maximumSize details kept at most
+     */
+    public record DetailCache(
+            @NotNull @DurationMin(millis = 0) Duration foundTtl,
+            @NotNull @DurationMin(millis = 0) Duration notFoundTtl,
+            @Positive long maximumSize) {
     }
 }

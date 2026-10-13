@@ -9,6 +9,9 @@ import java.time.Duration;
  */
 public final class Deadline {
 
+    /** On a clock that stands still, so the time left never shrinks. */
+    private static final Deadline NONE = new Deadline(() -> 0L, Long.MAX_VALUE);
+
     private final NanoClock clock;
     private final long deadline;
 
@@ -19,6 +22,14 @@ public final class Deadline {
 
     public static Deadline after(Duration budget, NanoClock clock) {
         return new Deadline(clock, clock.nanoTime() + budget.toNanos());
+    }
+
+    /**
+     * A deadline that never passes, for work that belongs to no request, such as a load shared
+     * by several of them.
+     */
+    public static Deadline none() {
+        return NONE;
     }
 
     /**

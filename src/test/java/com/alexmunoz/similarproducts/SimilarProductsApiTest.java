@@ -108,13 +108,45 @@ class SimilarProductsApiTest {
 
     @Test
     void recordsEachCallToTheExistingApis() {
+        // Products that only this test asks for, so no other test has cached them
+        similarIds("11", "[12,13]");
+        product("12", """
+                {"id":"12","name":"Hat","price":14.99,"availability":true}""", 0);
+        product("13", """
+                {"id":"13","name":"Scarf","price":24.99,"availability":true}""", 0);
         double similarIdsCalls = calls("/product/{productId}/similarids");
         double detailCalls = calls("/product/{productId}");
 
-        assertThat(mvc.get().uri("/product/{productId}/similar", "1")).hasStatusOk();
+        assertThat(mvc.get().uri("/product/{productId}/similar", "11")).hasStatusOk();
 
         assertThat(calls("/product/{productId}/similarids") - similarIdsCalls).isEqualTo(1.0);
-        assertThat(calls("/product/{productId}") - detailCalls).isEqualTo(3.0);
+        assertThat(calls("/product/{productId}") - detailCalls).isEqualTo(2.0);
+    }
+
+    @Test
+    void answersCachedDetailsWithoutCallingTheExistingApisAgain() {
+        // Products that only this test asks for, so no other test has cached them
+        similarIds("14", "[15,16]");
+        product("15", """
+                {"id":"15","name":"Belt","price":19.99,"availability":true}""", 0);
+        product("16", """
+                {"id":"16","name":"Gloves","price":29.99,"availability":false}""", 0);
+        assertThat(mvc.get().uri("/product/{productId}/similar", "14")).hasStatusOk();
+        double similarIdsCalls = calls("/product/{productId}/similarids");
+        double detailCalls = calls("/product/{productId}");
+
+        assertThat(mvc.get().uri("/product/{productId}/similar", "14"))
+                .hasStatusOk()
+                .bodyJson()
+                .isStrictlyEqualTo("""
+                        [
+                          {"id":"15","name":"Belt","price":19.99,"availability":true},
+                          {"id":"16","name":"Gloves","price":29.99,"availability":false}
+                        ]""");
+
+        // The similar ids are not cached
+        assertThat(calls("/product/{productId}/similarids") - similarIdsCalls).isEqualTo(1.0);
+        assertThat(calls("/product/{productId}") - detailCalls).isZero();
     }
 
     @Test

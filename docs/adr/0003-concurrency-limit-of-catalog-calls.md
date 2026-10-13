@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-10-12
 - **Authors:** Alex Muñoz
-- **Related:** ea124ea, ADR-0001, ADR-0004
+- **Related:** ea124ea, ADR-0001, ADR-0004, ADR-0005
 
 ## Context
 With virtual threads (ADR-0001) and parallel lookups (ADR-0004), nothing caps how many calls go out to the existing APIs at the same time: under the k6 load, a burst of requests or a slow dependency would pull in unbounded concurrency. When our own limit is reached, the cause is local saturation, not a failure of the existing APIs, and the response should say so.
@@ -25,3 +25,4 @@ The initial values, 100 slots and 100 ms, are starting hypotheses, not derived f
 ## Evolution
 - **2026-10-12:** a rejected detail no longer fails the request: the product is left out, and `503` is kept for when nothing else can be answered.
 - **2026-10-12:** the wait for a slot is bounded by the time left in the request, and a call does not start once the request has run out of budget.
+- **2026-10-13:** the load of a detail is shared by the requests that wait for it (ADR-0005) and belongs to none of them, so it waits for a slot only the permit timeout. A cached detail takes no slot.

@@ -28,4 +28,12 @@ class DeadlineTest {
         assertThat(deadline.remainingNanos()).isZero();
         assertThat(deadline.hasPassed()).isTrue();
     }
+
+    @Test
+    void aDeadlineForNoRequestNeverPasses() {
+        Deadline none = Deadline.none();
+
+        assertThat(none.remainingNanos()).isEqualTo(Long.MAX_VALUE);
+        assertThat(none.hasPassed()).isFalse();
+    }
 }
