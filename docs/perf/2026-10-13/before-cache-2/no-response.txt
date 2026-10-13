@@ -1,0 +1,2 @@
+  79 verySlow: dial tcp: i/o timeout
+requests without response: 79, with a cause in the k6 warnings: 79

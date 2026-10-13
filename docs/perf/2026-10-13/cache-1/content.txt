@@ -1,0 +1,3 @@
+complete lists:           7659
+partial lists:            5963
+details unavailable:      error 3963, timeout 3000, saturated 0

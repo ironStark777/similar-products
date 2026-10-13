@@ -1,0 +1,4 @@
+lookups:                  hit 33114, shared 6153, miss 1599
+without a new load:       96.1 %
+loads:                    found 6, not found 2, error 1576, timeout 15, saturated 0
+loads that called:        1599 (detail calls: 1599)

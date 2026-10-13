@@ -1,0 +1,65 @@
+name: http_reqs
+tags: scenario=error, status=200
+time requests
+---- --------
+0    3894
+
+name: http_reqs
+tags: scenario=normal, status=200
+time requests
+---- --------
+0    3194
+
+name: http_reqs
+tags: scenario=normal, status=503
+time requests
+---- --------
+0    6
+
+name: http_reqs
+tags: scenario=notFound, status=200
+time requests
+---- --------
+0    3954
+
+name: http_reqs
+tags: scenario=slow, status=0
+time requests
+---- --------
+0    32
+
+name: http_reqs
+tags: scenario=slow, status=200
+time requests
+---- --------
+0    523
+
+name: http_reqs
+tags: scenario=slow, status=503
+time requests
+---- --------
+0    1500
+
+name: http_reqs
+tags: scenario=slow, status=504
+time requests
+---- --------
+0    1
+
+name: http_reqs
+tags: scenario=verySlow, status=0
+time requests
+---- --------
+0    150
+
+name: http_reqs
+tags: scenario=verySlow, status=200
+time requests
+---- --------
+0    255
+
+name: http_reqs
+tags: scenario=verySlow, status=503
+time requests
+---- --------
+0    517

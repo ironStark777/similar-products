@@ -1,0 +1,4 @@
+run_id: 20261013-121320-60847
+started: 2026-10-13T10:13:20Z
+k6 exit code: 0
+result: OK

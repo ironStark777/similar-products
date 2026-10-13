@@ -1,0 +1,1 @@
+requests without response: 0, with a cause in the k6 warnings: 0

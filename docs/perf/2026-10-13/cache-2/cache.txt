@@ -1,0 +1,4 @@
+lookups:                  hit 32775, shared 6449, miss 1207
+without a new load:       97.0 %
+loads:                    found 6, not found 2, error 1184, timeout 15, saturated 0
+loads that called:        1207 (detail calls: 1207)

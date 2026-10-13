@@ -1,0 +1,5 @@
+most in progress at once: 100
+slots granted:            48187
+mean wait for a slot:     6.9 ms
+calls rejected:           4669
+out of budget waiting:    0

@@ -1,0 +1,3 @@
+ 150 verySlow: dial tcp: i/o timeout
+  32 slow: dial tcp: i/o timeout
+requests without response: 182, with a cause in the k6 warnings: 182

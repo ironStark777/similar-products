@@ -1,0 +1,53 @@
+name: http_req_duration
+tags: scenario=error, status=200
+time p50   p95     max
+---- ---   ---     ---
+0    8.593 108.343 272.393
+
+name: http_req_duration
+tags: scenario=normal, status=200
+time p50     p95     max
+---- ---     ---     ---
+0    112.347 251.328 419.342
+
+name: http_req_duration
+tags: scenario=normal, status=503
+time p50     p95     max
+---- ---     ---     ---
+0    159.839 185.271 185.271
+
+name: http_req_duration
+tags: scenario=notFound, status=200
+time p50   p95    max
+---- ---   ---    ---
+0    7.844 42.257 224.075
+
+name: http_req_duration
+tags: scenario=slow, status=200
+time p50      p95      max
+---- ---      ---      ---
+0    1602.306 1700.004 1924.829
+
+name: http_req_duration
+tags: scenario=slow, status=503
+time p50     p95     max
+---- ---     ---     ---
+0    161.306 205.422 235.161
+
+name: http_req_duration
+tags: scenario=slow, status=504
+time p50      p95      max
+---- ---      ---      ---
+0    1704.044 1704.044 1704.044
+
+name: http_req_duration
+tags: scenario=verySlow, status=200
+time p50      p95      max
+---- ---      ---      ---
+0    1515.701 1635.499 1663.398
+
+name: http_req_duration
+tags: scenario=verySlow, status=503
+time p50     p95     max
+---- ---     ---     ---
+0    105.989 215.611 247.435

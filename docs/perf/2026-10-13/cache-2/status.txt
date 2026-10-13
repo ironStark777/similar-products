@@ -1,0 +1,29 @@
+name: http_reqs
+tags: scenario=error, status=200
+time requests
+---- --------
+0    3872
+
+name: http_reqs
+tags: scenario=normal, status=200
+time requests
+---- --------
+0    3628
+
+name: http_reqs
+tags: scenario=notFound, status=200
+time requests
+---- --------
+0    3956
+
+name: http_reqs
+tags: scenario=slow, status=200
+time requests
+---- --------
+0    1000
+
+name: http_reqs
+tags: scenario=verySlow, status=200
+time requests
+---- --------
+0    1000

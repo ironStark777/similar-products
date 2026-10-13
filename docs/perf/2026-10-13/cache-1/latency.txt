@@ -1,0 +1,29 @@
+name: http_req_duration
+tags: scenario=error, status=200
+time p50   p95    max
+---- ---   ---    ---
+0    4.483 17.039 45.722
+
+name: http_req_duration
+tags: scenario=normal, status=200
+time p50   p95     max
+---- ---   ---     ---
+0    15.18 149.296 317.523
+
+name: http_req_duration
+tags: scenario=notFound, status=200
+time p50   p95    max
+---- ---   ---    ---
+0    8.261 34.866 71.71
+
+name: http_req_duration
+tags: scenario=slow, status=200
+time p50      p95      max
+---- ---      ---      ---
+0    1484.736 1549.674 1589.344
+
+name: http_req_duration
+tags: scenario=verySlow, status=200
+time p50      p95      max
+---- ---      ---      ---
+0    1480.015 1560.169 1577.554

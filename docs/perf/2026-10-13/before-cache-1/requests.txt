@@ -1,0 +1,6 @@
+scenario  product  status   time        products
+normal    1        200      0.116456s   [2,3,4]
+notFound  4        200      0.009994s   [1,2]
+error     5        200      0.011306s   [1,2]
+slow      2        200      1.508237s   [3,100]
+verySlow  3        200      1.517744s   [100]

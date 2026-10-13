@@ -1,0 +1,2 @@
+similarids: 13162 calls, mean 5.8 ms
+details:    35132 calls, mean 74.3 ms
