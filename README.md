@@ -45,6 +45,43 @@ Results are saved in `target/perf/<run id>/`, which `./mvnw clean` deletes.
 
 Errors are answered as `application/problem+json`.
 
+## How a request is answered
+
+The similar ids are looked up for every request; the details go through the cache, which shares the loads in progress.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant S as SimilarProductsService
+    participant L as CatalogCallLimiter
+    participant D as DetailLookupCache
+    participant A as Existing APIs
+
+    C->>S: GET /product/{productId}/similar
+    Note over S: deadline = now + 2 s
+    S->>L: similar ids, waiting ≤ 100 ms for a slot
+    L->>A: GET /product/{productId}/similarids, timeout 1.5 s
+    A-->>S: similar ids
+    par each similar product, in parallel
+        S->>D: detail, waiting until the deadline at most
+        alt cached
+            D-->>S: found or not found
+        else load in progress
+            Note over D: joins it and waits only for the rest
+            D-->>S: result of that load
+        else no entry
+            D->>L: new load on its own executor, waiting ≤ 100 ms for a slot
+            L->>A: GET /product/{id}, timeout 1.5 s
+            A-->>D: detail, 404, error or timeout
+            Note over D: found: 30 s, not found: 5 s, unavailable: not cached
+            D-->>S: result
+        end
+    end
+    Note over S,D: at the deadline the request stops waiting, the loads go on for the next requests
+    S-->>C: 200 with the details found, or 404, 502, 504, 503
+```
+
 ## Design
 
 - **Spring MVC on virtual threads:** blocking, imperative code without tying up platform threads ([ADR-0001](docs/adr/0001-spring-mvc-on-virtual-threads.md)).
