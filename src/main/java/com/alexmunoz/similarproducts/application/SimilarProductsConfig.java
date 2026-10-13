@@ -1,5 +1,6 @@
 package com.alexmunoz.similarproducts.application;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.concurrent.Executors;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -18,8 +19,10 @@ class SimilarProductsConfig {
      * Spring Boot back off its auto-configured task executor.
      */
     @Bean
-    DetailLookupCache detailLookupCache(SimilarProductsProperties properties, NanoClock clock) {
+    DetailLookupCache detailLookupCache(SimilarProductsProperties properties, NanoClock clock,
+                                        MeterRegistry meterRegistry) {
         return new DetailLookupCache(properties.detailCache(), clock,
-                Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("detail-load-", 0).factory()));
+                Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("detail-load-", 0).factory()),
+                meterRegistry);
     }
 }

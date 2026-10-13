@@ -9,8 +9,10 @@ import com.alexmunoz.similarproducts.application.DetailLookup.NotFound;
 import com.alexmunoz.similarproducts.application.DetailLookup.Reason;
 import com.alexmunoz.similarproducts.application.DetailLookup.Unavailable;
 import com.alexmunoz.similarproducts.application.SimilarProductsProperties.DetailCache;
+import com.alexmunoz.similarproducts.domain.ProductCatalogException;
 import com.alexmunoz.similarproducts.domain.ProductCatalogTimeoutException;
 import com.alexmunoz.similarproducts.domain.ProductDetail;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.concurrent.CancellationException;
@@ -33,7 +35,8 @@ class DetailLookupCacheTest {
     private final FakeNanoClock clock = new FakeNanoClock();
     // A single thread, so a test can wait until the loads started so far have ended
     private final ExecutorService loads = Executors.newSingleThreadExecutor();
-    private final DetailLookupCache cache = new DetailLookupCache(SETTINGS, clock, loads);
+    private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+    private final DetailLookupCache cache = new DetailLookupCache(SETTINGS, clock, loads, meterRegistry);
     private final AtomicInteger loadCount = new AtomicInteger();
     private final CountDownLatch loadStarted = new CountDownLatch(1);
     private final CountDownLatch release = new CountDownLatch(1);
@@ -116,6 +119,40 @@ class DetailLookupCacheTest {
         assertThat(loadCount).hasValue(0);
     }
 
+    @Test
+    void countsALookUpAsAMissASharedLoadOrAHit() throws InterruptedException {
+        Waiter first = new Waiter(blockedLoad(SHIRT));
+        awaitLatch(loadStarted);
+        Waiter second = new Waiter(blockedLoad(SHIRT));
+        second.awaitWaiting();
+        release.countDown();
+        first.result();
+        second.result();
+
+        cache.lookUp("1", deadlineIn(WAIT_LIMIT), blockedLoad(SHIRT));
+
+        assertThat(lookups("miss")).isEqualTo(1);
+        assertThat(lookups("shared")).isEqualTo(1);
+        assertThat(lookups("hit")).isEqualTo(1);
+    }
+
+    @Test
+    void countsTheResultOfEachLoad() {
+        cache.lookUp("1", deadlineIn(WAIT_LIMIT), immediateLoad(SHIRT));
+        cache.lookUp("2", deadlineIn(WAIT_LIMIT), immediateLoad(new NotFound()));
+        cache.lookUp("3", deadlineIn(WAIT_LIMIT), immediateLoad(unavailable(Reason.ERROR)));
+        cache.lookUp("4", deadlineIn(WAIT_LIMIT), immediateLoad(unavailable(Reason.TIMEOUT)));
+        cache.lookUp("5", deadlineIn(WAIT_LIMIT), immediateLoad(unavailable(Reason.SATURATED)));
+        // A hit makes no load
+        cache.lookUp("1", deadlineIn(WAIT_LIMIT), immediateLoad(SHIRT));
+
+        assertThat(loads("found")).isEqualTo(1);
+        assertThat(loads("not_found")).isEqualTo(1);
+        assertThat(loads("error")).isEqualTo(1);
+        assertThat(loads("timeout")).isEqualTo(1);
+        assertThat(loads("saturated")).isEqualTo(1);
+    }
+
     /**
      * The entry expires exactly after its time to live from the end of the load, although it
      * is read just before.
@@ -159,6 +196,18 @@ class DetailLookupCacheTest {
     private void awaitLoadsEnded() throws Exception {
         loads.submit(() -> {
         }).get(WAIT_LIMIT.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    private double lookups(String result) {
+        return meterRegistry.get("detail.cache.lookups").tag("result", result).counter().count();
+    }
+
+    private double loads(String result) {
+        return meterRegistry.get("detail.cache.loads").tag("result", result).counter().count();
+    }
+
+    private static Unavailable unavailable(Reason reason) {
+        return new Unavailable(reason, new ProductCatalogException("The detail of the product could not be retrieved"));
     }
 
     private static Deadline deadlineIn(Duration budget) {

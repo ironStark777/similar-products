@@ -10,7 +10,8 @@
 #      they count and do not overlap with the next step: until no call is pending and no slot
 #      is granted or rejected in several samples in a row, within a deadline,
 #   3. how many of the lists answered were complete or partial, and why details were missing,
-#   4. one request per scenario: status, time and products returned.
+#   4. how the detail cache answered the lookups, and the result of each load,
+#   5. one request per scenario: status, time and products returned.
 #
 # Usage: perf/measure.sh <path to backendDevTest>
 #
@@ -157,6 +158,9 @@ curl -sf --connect-timeout 2 --max-time "$metrics_max_time" "$app/actuator/healt
     || fail "the application is not running on $app"
 curl -sf --connect-timeout 2 --max-time "$metrics_max_time" "$app/actuator/metrics" > /dev/null \
     || fail "the metrics endpoint is not exposed on $app"
+# Without InfluxDB, k6 still runs but keeps no samples: stop before spending the run
+(cd "$harness" && $compose exec -T influxdb influx -execute 'SHOW DATABASES' > /dev/null 2>&1) \
+    || fail "InfluxDB is not running: start it in $harness with '$compose up -d influxdb'"
 
 similar_ids_before=$(calls "$similar_ids_uri" COUNT)
 similar_ids_time_before=$(calls "$similar_ids_uri" TOTAL_TIME)
@@ -171,6 +175,14 @@ partial_before=$(metric similar.products.responses COUNT result:partial)
 unavailable_error_before=$(metric similar.products.details.unavailable COUNT reason:error)
 unavailable_timeout_before=$(metric similar.products.details.unavailable COUNT reason:timeout)
 unavailable_saturated_before=$(metric similar.products.details.unavailable COUNT reason:saturated)
+cache_hit_before=$(metric detail.cache.lookups COUNT result:hit)
+cache_shared_before=$(metric detail.cache.lookups COUNT result:shared)
+cache_miss_before=$(metric detail.cache.lookups COUNT result:miss)
+load_found_before=$(metric detail.cache.loads COUNT result:found)
+load_not_found_before=$(metric detail.cache.loads COUNT result:not_found)
+load_error_before=$(metric detail.cache.loads COUNT result:error)
+load_timeout_before=$(metric detail.cache.loads COUNT result:timeout)
+load_saturated_before=$(metric detail.cache.loads COUNT result:saturated)
 
 echo "== k6 run $run_id (about 2 minutes)"
 echo "started: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$out/run.txt"
@@ -279,6 +291,44 @@ unavailable_saturated=$(delta "$unavailable_saturated_after" "$unavailable_satur
     echo "partial lists:            $partial"
     echo "details unavailable:      error $unavailable_error, timeout $unavailable_timeout, saturated $unavailable_saturated"
 } | tee "$out/content.txt"
+
+echo
+echo "== Detail cache"
+cache_hit_after=$(metric detail.cache.lookups COUNT result:hit)
+cache_shared_after=$(metric detail.cache.lookups COUNT result:shared)
+cache_miss_after=$(metric detail.cache.lookups COUNT result:miss)
+load_found_after=$(metric detail.cache.loads COUNT result:found)
+load_not_found_after=$(metric detail.cache.loads COUNT result:not_found)
+load_error_after=$(metric detail.cache.loads COUNT result:error)
+load_timeout_after=$(metric detail.cache.loads COUNT result:timeout)
+load_saturated_after=$(metric detail.cache.loads COUNT result:saturated)
+cache_hit=$(delta "$cache_hit_after" "$cache_hit_before")
+cache_shared=$(delta "$cache_shared_after" "$cache_shared_before")
+cache_miss=$(delta "$cache_miss_after" "$cache_miss_before")
+load_found=$(delta "$load_found_after" "$load_found_before")
+load_not_found=$(delta "$load_not_found_after" "$load_not_found_before")
+load_error=$(delta "$load_error_after" "$load_error_before")
+load_timeout=$(delta "$load_timeout_after" "$load_timeout_before")
+load_saturated=$(delta "$load_saturated_after" "$load_saturated_before")
+{
+    if [ "$cache_hit" = "-" ]; then
+        echo "unknown: this version has no detail cache metrics"
+    else
+        lookups=$((cache_hit + cache_shared + cache_miss))
+        echo "lookups:                  hit $cache_hit, shared $cache_shared, miss $cache_miss"
+        if [ "$lookups" -gt 0 ]; then
+            awk -v answered=$((cache_hit + cache_shared)) -v lookups="$lookups" \
+                'BEGIN { printf "without a new load:       %.1f %%\n", answered * 100 / lookups }'
+        fi
+        echo "loads:                    found $load_found, not found $load_not_found, error $load_error, timeout $load_timeout, saturated $load_saturated"
+        # A load rejected by the limit makes no call; every other one makes exactly one
+        loads_calling=$((load_found + load_not_found + load_error + load_timeout))
+        echo "loads that called:        $loads_calling (detail calls: $details)"
+        if [ "$loads_calling" -ne "$details" ]; then
+            echo "WARNING: the loads do not match the calls recorded for the details"
+        fi
+    fi
+} | tee "$out/cache.txt"
 
 echo
 echo "== Requests per scenario and status"

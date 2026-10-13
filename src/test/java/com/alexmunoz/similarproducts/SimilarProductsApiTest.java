@@ -232,6 +232,8 @@ class SimilarProductsApiTest {
         assertThat(mvc.get().uri("/actuator/metrics/catalog.calls.permit.wait")).hasStatusOk();
         assertThat(mvc.get().uri("/actuator/metrics/similar.products.responses")).hasStatusOk();
         assertThat(mvc.get().uri("/actuator/metrics/similar.products.details.unavailable")).hasStatusOk();
+        assertThat(mvc.get().uri("/actuator/metrics/detail.cache.lookups")).hasStatusOk();
+        assertThat(mvc.get().uri("/actuator/metrics/detail.cache.loads")).hasStatusOk();
     }
 
     /**

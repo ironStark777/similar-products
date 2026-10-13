@@ -42,7 +42,7 @@ class SimilarProductsServiceTest {
     private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
     private final CatalogCallLimiter limiter = new CatalogCallLimiter(properties(DISTANT_BUDGET), meterRegistry);
     private final DetailLookupCache detailLookups = new DetailLookupCache(DETAIL_CACHE, NanoClock.system(),
-            Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory()));
+            Executors.newThreadPerTaskExecutor(Thread.ofVirtual().factory()), meterRegistry);
 
     @Test
     void returnsTheDetailOfEachSimilarProductInSimilarityOrder() {
